@@ -180,10 +180,12 @@ def create_account(
             text(
                 """
                 INSERT INTO client (
-                    client_key, client_type, email, timezone, status_id,
+                    client_key, client_type_id, email, timezone, status_id,
                     created_at, updated_at
                 ) VALUES (
-                    :client_key, :client_type, :email, 'America/Sao_Paulo',
+                    :client_key,
+                    (SELECT id FROM client_type WHERE enumerator = :client_type),
+                    :email, 'America/Sao_Paulo',
                     (SELECT id FROM client_status
                      WHERE enumerator = :client_status),
                     :created_at, :created_at
