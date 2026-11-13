@@ -1,7 +1,7 @@
 from hashlib import sha256
 from uuid import UUID, uuid4
 
-from controllers.transaction_hash import (
+from services.transaction_hash import (
     build_deposit_request_hash,
     build_transfer_request_hash,
     canonicalize_deposit_request,

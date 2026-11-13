@@ -3,7 +3,7 @@
 import pytest
 
 
-from controllers.transaction_fee import calculate_transfer_fee_cents
+from services.transfer_fee import calculate_transfer_fee_cents
 
 
 @pytest.mark.parametrize(

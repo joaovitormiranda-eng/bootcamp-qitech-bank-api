@@ -6,8 +6,8 @@ from psycopg2.errors import UniqueViolation
 from sqlalchemy.exc import IntegrityError
 
 from controllers.base_controller import BaseController
-from controllers.transaction_fee import calculate_transfer_fee_cents
-from controllers.transaction_hash import (
+from services.transfer_fee import calculate_transfer_fee_cents
+from services.transaction_hash import (
     build_deposit_request_hash,
     build_transfer_request_hash,
 )
