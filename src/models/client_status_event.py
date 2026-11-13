@@ -31,7 +31,7 @@ class ClientStatusEvent(Base):
 
     actor_type_id = Column(
         BigInteger,
-        ForeignKey(ActorType.id),
+        ForeignKey(ActorType.id, ondelete="RESTRICT"),
         nullable=False,
     )
     reason = Column(String(500))

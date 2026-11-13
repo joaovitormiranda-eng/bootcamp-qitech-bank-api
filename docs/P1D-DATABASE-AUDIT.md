@@ -389,6 +389,82 @@ Detalhado em `database/migrations/`. Resumo:
 
 ---
 
-## 10. Risco residual e pendências (preenchido na FASE F)
+## 10. Validação (FASE E) — evidências reais
 
-Ver seção final após validação de CI.
+Ambiente de dev sem Docker/Postgres (§0.1); a validação autoritativa é o
+**GitHub Actions CI** do PR #5.
+
+### 10.1 Suíte completa — job `test` (obrigatório, intacto)
+- Run verde: `43524651498`, commit `95f2afc`, job `test` = **success**.
+- Resultado do passo *Run full pytest suite*: **`544 passed in 25.12s`**.
+- Falhas: 0 · Erros: 0 · Skips: 0 (nenhum skip/xfail artificial).
+- Baseline de 521 preservada; +23 testes novos (16 de lookup, 2 de migração
+  populada, e casos de contrato de `entry_key`/FK). Nenhum teste removido,
+  nenhuma asserção enfraquecida.
+
+### 10.2 Migração em banco populado — job `migration` (isolado)
+- Job `migration` = **success** no mesmo run, em cluster PostgreSQL próprio
+  (porta 5434), sem tocar o job `test`.
+- Evidências do log:
+  - `Snapshot BEFORE` e `Snapshot AFTER` idênticos:
+    `clients=2 · entries=2 · txns=2 · sum_balance=599800` → **dados e totais
+    monetários preservados**.
+  - `Migração populada validada com sucesso.` (entry_key total/único; nenhuma
+    FK nova nula; lookups criadas).
+  - `Idempotência da migração confirmada.` (reexecução é no-op; lookups sem
+    duplicata).
+  - `Rollback validado: estrutura legada restaurada e dados preservados.`
+
+### 10.3 Validações locais complementares
+- `configure_mappers()` OK; metadados ORM batem 1:1 com `database.sql`
+  (15 tabelas, colunas/FKs/`entry_key` corretos).
+- 544 testes coletados sem erro de importação.
+- 34 testes unitários host-runnable verdes.
+- Propriedades textuais (`client_type`/`transaction_type`/`direction`/
+  `entry_type`/`actor_type`) verificadas no nível de objeto.
+
+## 11. Revisão semântica independente (FASE F) e risco residual
+
+Revisão comportamental independente do diff (SQL, locks, atomicidade,
+regressões, recuperação). **Veredito: APROVADO — seguro para merge como um
+único PR; nenhum problema bloqueante.** `src/controllers/` e `src/services/`
+têm **zero** linhas de diff, logo tarifa, HALF_UP, idempotência, CHECK de saldo
+e ordenação do extrato (desempate por `transaction_entry.id`, ainda PK) estão
+comprovadamente intactos.
+
+### Itens não-bloqueantes levantados e tratamento
+1. **Propriedades de texto sem guarda None/detached** — latente, sem caminho
+   ativo de falha (todas as leituras ocorrem com sessão aberta; o fluxo de
+   análise copia `client_type` para dict antes do `rollback`). Mantido sem
+   guarda para **falhar alto** caso um futuro caller use a propriedade em
+   instância expirada, em vez de mascarar bug retornando None.
+2. **Resolução de lookup dentro da janela de lock** — apenas SELECTs
+   read-only em tabelas-semente imutáveis; **sem** risco de ordem de lock ou
+   deadlock (ordem por `ACCOUNT.id` inalterada). Custo: round-trips extras.
+   Aceito para o escopo; tabelas minúsculas e em cache de plano.
+3. **Preservação de dados no rollback não era aferida pelo CI** → **tratado**:
+   o passo de rollback do job `migration` agora compara contagens e
+   `sum_balance` com o estado original e valida o texto das enumerações após o
+   round-trip.
+4. **Falta de teste pytest de rollback de dados** → coberto pela aferição de
+   CI do item 3 (rollback só é executável com Postgres real). Pendência menor:
+   um teste pytest de rollback no banco efêmero poderia ser adicionado numa
+   fase futura.
+5. **Drift de `ondelete` no ORM** → **tratado**: `ondelete="RESTRICT"`
+   alinhado em `client.client_type_id`, `financial_transaction.transaction_type_id`
+   e `client_status_event.actor_type_id` (cosmético; o DDL vem de `database.sql`).
+
+### Risco residual (final)
+- **Baixo.** Mudança aditiva/normalizadora, contrato HTTP e invariantes
+  financeiras preservados, validada por CI verde real (suíte + migração
+  populada + idempotência + rollback).
+- **Pendência explícita e consciente:** teste pytest dedicado de rollback de
+  dados (hoje coberto só pelo CI); e as duas tabelas de especialização PF/PJ
+  foram **preservadas** por decisão de engenharia fundamentada (§2.2) — se a
+  banca exigir o padrão literal `id`+`*_key` nelas, a divergência está
+  documentada com a justificativa de que o literal pioraria o modelo e criaria
+  identidade pública duplicada.
+
+### Referência de revisão
+PR da P1-D: #5 (`refactor/p1d-postgresql-model-integrity` → `main`). Não fazer
+merge automático; não abrir PR no upstream.

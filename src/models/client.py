@@ -13,7 +13,7 @@ class Client(Base):
     client_key = Column(UUID(as_uuid=True), nullable=False, unique=True)
     client_type_id = Column(
         BigInteger,
-        ForeignKey(ClientType.id),
+        ForeignKey(ClientType.id, ondelete="RESTRICT"),
         nullable=False,
     )
     email = Column(String(254), nullable=False, unique=True)

@@ -390,10 +390,11 @@ jobs:
           "
           echo "Idempotência da migração confirmada."
 
-      - name: Validate rollback restores legacy schema
+      - name: Validate rollback restores legacy schema AND preserves data
         run: |
           psql "$MIG_URL" -v ON_ERROR_STOP=1 \
             -f database/migrations/0001_ROLLBACK.sql
+          # Estrutura: colunas textuais de volta, lookups removidas.
           psql "$MIG_URL" -At -v ON_ERROR_STOP=1 -c "
             DO \$rb\$
             BEGIN
@@ -409,4 +410,33 @@ jobs:
             END
             \$rb\$;
           "
-          echo "Rollback estrutural validado."
+          # Dados: contagens e soma de saldos idênticas ao estado original
+          # (lossless para dados de negócio no round-trip migrate->rollback).
+          psql "$MIG_URL" -At -v ON_ERROR_STOP=1 -c "
+            SELECT 'clients='||count(*) FROM client
+            UNION ALL SELECT 'entries='||count(*) FROM transaction_entry
+            UNION ALL SELECT 'txns='||count(*) FROM financial_transaction
+            UNION ALL SELECT 'sum_balance='||COALESCE(sum(balance_cents),0) FROM account
+          " | tee rolled_back.txt
+          if ! diff -u before.txt rolled_back.txt; then
+            echo "FALHA: rollback perdeu/alterou dados de negócio." >&2
+            exit 1
+          fi
+          # Texto das enumerações preservado após o round-trip completo.
+          psql "$MIG_URL" -At -v ON_ERROR_STOP=1 -c "
+            DO \$txt\$
+            BEGIN
+              IF NOT EXISTS (
+                SELECT 1 FROM transaction_entry
+                WHERE direction IN ('DEBIT','CREDIT') AND entry_type IN ('PRINCIPAL','FEE')
+              ) THEN
+                RAISE EXCEPTION 'rollback não restaurou o texto de direction/entry_type';
+              END IF;
+              IF EXISTS (SELECT 1 FROM financial_transaction
+                         WHERE transaction_type NOT IN ('DEPOSIT','TRANSFER')) THEN
+                RAISE EXCEPTION 'rollback corrompeu transaction_type';
+              END IF;
+            END
+            \$txt\$;
+          "
+          echo "Rollback validado: estrutura legada restaurada e dados preservados."
