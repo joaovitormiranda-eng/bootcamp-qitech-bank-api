@@ -757,8 +757,8 @@ exactly the 15 new tests).
 **CI is authoritative.** The orchestrator supplies the final GitHub Actions run
 link and the validated commit SHA after pushing the branch:
 
-- CI / Actions run: _PLACEHOLDER (orchestrator fills after push)_
-- Validated commit SHA: _PLACEHOLDER (orchestrator fills after push)_
+- CI / Actions run: [Actions run 43498881508](https://github.com/joaovitormiranda-eng/bootcamp-qitech-bank-api/actions/runs/43498881508) (success, 521 passed)
+- Validated commit SHA: `76041faff9fbd2bb2326466b694b66762767a21d` (short: `76041fa`)
 
 ## Section 11: Remaining pendencies and risks
 

@@ -95,5 +95,5 @@ MockServer cadastral integration; HTTP contracts and RFC error codes. See
 - Local (host, pure unit only):
   - `.venv/bin/python -m pytest --collect-only -q | tail -1` -> `521 tests collected`.
   - `cd src && ../.venv/bin/python -m pytest ../tests/unit -q` -> `34 passed`.
-- CI / Actions run: _PLACEHOLDER (orchestrator fills after push)_
-- Validated commit SHA: _PLACEHOLDER (orchestrator fills after push)_
+- CI / Actions run: [Actions run 43498881508](https://github.com/joaovitormiranda-eng/bootcamp-qitech-bank-api/actions/runs/43498881508) (success, 521 passed)
+- Validated commit SHA: `76041faff9fbd2bb2326466b694b66762767a21d` (short: `76041fa`)
