@@ -4,7 +4,7 @@
 
 O projeto implementa o ciclo bancário básico de uma plataforma parceira: cadastro de pessoas físicas (PF) e jurídicas (PJ), análise cadastral, abertura e gerenciamento de contas, depósitos, transferências e consulta de extrato. A solução prioriza **consistência financeira, integridade dos estados, idempotência, concorrência e rastreabilidade**, com desenvolvimento orientado a testes (**TDD — RED → GREEN → REFACTOR**).
 
-> **Entrega — 12/10/2026:** as **10 rotas (R01–R10)** estão integradas à `main`. A última regressão integrada informada pela equipe concluiu com **442 testes aprovados em 64,58 s**. Esses números registram uma execução validada, não uma promessa de resultado em qualquer ambiente.
+> **Entrega (12/10/2026):** as **10 rotas (R01–R10)** estão integradas à `main`. A evidência reprodutível e autoritativa da suíte completa é o pipeline de **Integração Contínua** (`.github/workflows/ci.yml`), que executou e passou verde no GitHub Actions: run [`43474403332`](https://github.com/joaovitormiranda-eng/bootcamp-qitech-bank-api/actions/runs/43474403332), com **442 testes aprovados em 18,44 s**. Historicamente, a equipe já havia reportado uma execução local com 442 testes aprovados em 64,58 s; a evidência reprodutível atual, porém, é o run de CI acima. O resultado verde deve ser lido na aba **Actions** do repositório. Veja a seção [CI / Integração contínua](#ci--integração-contínua).
 
 ## Quick start
 
@@ -13,11 +13,15 @@ O projeto implementa o ciclo bancário básico de uma plataforma parceira: cadas
 Pré-requisito: **somente Docker com Compose**. Para iniciar o projeto desde um clone novo:
 
 ```bash
-git clone https://github.com/mohamad347/bootcamp-qitech-bank-api.git
+git clone https://github.com/joaovitormiranda-eng/bootcamp-qitech-bank-api.git
 cd bootcamp-qitech-bank-api
 docker compose up -d --build --wait
 curl -i http://localhost:3000/health_check
 ```
+
+> O projeto original (upstream) é
+> [`mohamad347/bootcamp-qitech-bank-api`](https://github.com/mohamad347/bootcamp-qitech-bank-api);
+> os comandos acima usam o fork `joaovitormiranda-eng/bootcamp-qitech-bank-api`.
 
 Não é necessário exportar variáveis, instalar PostgreSQL no host, executar SQL
 ou configurar o MockServer. Se o repositório já estiver clonado, basta entrar
@@ -118,9 +122,13 @@ O banco possui **10 tabelas**, agrupadas em cadastro, contas e movimentações f
 Clone o repositório e entre na pasta do projeto:
 
 ```powershell
-git clone https://github.com/mohamad347/bootcamp-qitech-bank-api.git
+git clone https://github.com/joaovitormiranda-eng/bootcamp-qitech-bank-api.git
 cd bootcamp-qitech-bank-api
 ```
+
+> O projeto original (upstream) é
+> [`mohamad347/bootcamp-qitech-bank-api`](https://github.com/mohamad347/bootcamp-qitech-bank-api);
+> o comando acima usa o fork `joaovitormiranda-eng/bootcamp-qitech-bank-api`.
 
 Se necessário, crie o arquivo de configuração local a partir do exemplo versionado:
 
@@ -152,9 +160,57 @@ docker compose stop
 
 As portas locais de referência são **3000** (API), **5432** (PostgreSQL principal) e **1080** (MockServer, quando habilitado). Os valores de `.env.example` e as credenciais de desenvolvimento são destinados **somente ao ambiente local**. O script [`database/database.sql`](database/database.sql) inicializa o esquema no primeiro provisionamento de um volume PostgreSQL vazio; reconstruir um container não reinicializa automaticamente um volume persistente.
 
+## CI / Integração contínua
+
+[![CI - full test suite](https://github.com/joaovitormiranda-eng/bootcamp-qitech-bank-api/actions/workflows/ci.yml/badge.svg?branch=fix/p0-test-suite-reproducibility)](https://github.com/joaovitormiranda-eng/bootcamp-qitech-bank-api/actions/workflows/ci.yml)
+
+O workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) é a forma
+**sancionada e reprodutível** de executar a suíte completa (442 testes: unitários,
+integração HTTP e esquema). A cada `push` e `pull_request` ele provisiona, em um
+runner `ubuntu-latest`, toda a infraestrutura que os testes exigem e executa
+`pytest` como único portão de aprovação do job:
+
+- **PostgreSQL** (`postgres:16`) em **dois clusters fisicamente separados**:
+  `bootcamp` (API) em `127.0.0.1:5432` e `bootcamp_test` (esquema/testes) em
+  `127.0.0.1:5433`. Precisam ser instâncias distintas porque as fixtures de
+  suporte comparam o `system_identifier` (único por cluster físico) e exigem que
+  o banco da API e o banco de testes estejam em servidores diferentes;
+  `database/database.sql` é carregado em `bootcamp`.
+- **MockServer** (`mockserver/mockserver:8.0.0`) como provedor cadastral simulado;
+  os testes da R03 configuram as expectativas em tempo de execução pela API de
+  controle.
+- **API viva** via `uvicorn app:app` em `127.0.0.1:3001`, aguardada até
+  `/health_check` responder **204** antes de rodar a suíte.
+
+**A evidência verde autoritativa é a execução do workflow na aba Actions do
+repositório**, não uma garantia independente de ambiente. O CI foi executado e
+passou: run [`43474403332`](https://github.com/joaovitormiranda-eng/bootcamp-qitech-bank-api/actions/runs/43474403332),
+com **`442 passed in 18.44s`** (442 coletados, 442 aprovados, 0 falhas, 0 erros,
+0 ignorados). Nenhum resultado verde foi fabricado neste README: o número de
+testes aprovados e o tempo são os lidos no log do GitHub Actions, e a aba
+[**Actions**](https://github.com/joaovitormiranda-eng/bootcamp-qitech-bank-api/actions/workflows/ci.yml)
+permanece a fonte autoritativa. O artefato `pytest-results` publicado pelo job
+contém o relatório JUnit (`pytest-results.xml`) e o `api.log`.
+
+Localmente, a suíte completa continua dependendo de **Docker**, conforme descrito
+na seção abaixo. Sem Docker (ou sem PostgreSQL + MockServer + API disponíveis no
+host), apenas os testes unitários isolados rodam de ponta a ponta:
+
+```bash
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pytest tests/unit -q
+```
+
 ## Executar os testes
 
 A suíte inclui testes de contrato HTTP, regras de domínio, persistência, estados, idempotência, concorrência, rollback, movimentações financeiras e extrato.
+
+> **Docker é obrigatório para a execução local completa.** Os testes de
+> integração HTTP exigem a API viva, o PostgreSQL e o MockServer no ar ao mesmo
+> tempo; a stack do Compose provê exatamente esses serviços. Para uma execução
+> reprodutível sem configurar a infraestrutura à mão, prefira o pipeline de CI
+> descrito em [CI / Integração contínua](#ci--integração-contínua).
 
 ### 1. Instalar as dependências de desenvolvimento (PowerShell)
 
@@ -195,9 +251,34 @@ Para executar somente os testes físicos do esquema:
 .\.venv\Scripts\python.exe -m pytest tests/integration/database -q
 ```
 
-**Última regressão integrada informada pela equipe:** `442 passed in 64.58s` (12/10/2026).
+No Linux/macOS, exporte as mesmas variáveis com `export` (por exemplo
+`export SERVER_LOCALHOST=127.0.0.1`) e use `.venv/bin/python -m pytest -q`. As
+variáveis aceitas pela suíte (com os defaults de `tests/conftest.py`) são
+`DATABASE_URL`, `TEST_DATABASE_URL`, `ANALYSIS_PROVIDER_URL`, `MOCKSERVER_URL`,
+`SERVER_LOCALHOST`, `API_PORT`, `INTERNAL_TOKEN` e `ANALYSIS_PROVIDER_TIMEOUT`.
+Elas precisam apontar para os serviços que você subiu. O workflow
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) é a referência exata desse
+mapeamento, pois executa o mesmo `pytest` contra uma stack totalmente provisionada.
 
-**Isolamento:** o banco `bootcamp_test` destina-se aos testes de esquema, mas certos testes HTTP de integração podem criar **dados exclusivamente de teste** no banco local principal por meio da API. Não execute a suíte apontando a aplicação para um banco de produção ou com dados reais. Para parar somente o banco de testes:
+**Resultado dos testes:** a evidência de reprodução do P0 vem da execução do
+workflow de CI: run [`43474403332`](https://github.com/joaovitormiranda-eng/bootcamp-qitech-bank-api/actions/runs/43474403332)
+concluiu com **`442 passed in 18.44s`**. Historicamente, a equipe reportou uma
+execução local de `442 passed in 64.58s` (12/10/2026); ambos registram execuções
+específicas, **não** uma garantia independente de ambiente. O banco da API roda
+em `127.0.0.1:5432` (`bootcamp`) e o banco descartável de testes em
+`127.0.0.1:5433` (`bootcamp_test`), em clusters separados. Leia o número de
+testes aprovados e o tempo na aba **Actions** do repositório, a fonte
+autoritativa.
+
+**Isolamento e segurança do reset destrutivo:** o reset de esquema em
+`tests/utils/db_utils.py` executa **`DROP SCHEMA public CASCADE`** e recria o
+schema a partir de `database/database.sql`. Isso **apaga todas as tabelas** do
+banco apontado. Por isso a função só prossegue quando o nome do banco termina em
+`_test`, e o `TEST_DATABASE_URL` deve **sempre** apontar para o banco efêmero
+`bootcamp_test`, **nunca** para um banco compartilhado, principal ou de produção.
+Além disso, certos testes HTTP de integração podem criar **dados exclusivamente de
+teste** no banco principal por meio da API; não execute a suíte apontando a
+aplicação para um banco com dados reais. Para parar somente o banco de testes:
 
 ```powershell
 docker compose -f compose.test.yml stop db_test
@@ -207,6 +288,9 @@ docker compose -f compose.test.yml stop db_test
 
 ```text
 bootcamp-qitech-bank-api/
+├── .github/
+│   └── workflows/
+│       └── ci.yml             # Pipeline de CI: stack completa + suíte pytest
 ├── src/                       # API, regras de negócio e persistência
 ├── database/
 │   └── database.sql           # Esquema PostgreSQL
