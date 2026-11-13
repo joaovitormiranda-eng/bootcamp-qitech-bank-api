@@ -78,9 +78,10 @@ def _transition_client_fixture(
             text(
                 """
                 INSERT INTO client_status_event
-                    (client_id, from_status_id, to_status_id, actor_type, reason, created_at)
+                    (client_id, from_status_id, to_status_id, actor_type_id, reason, created_at)
                 SELECT :client_id, :from_status_id, status.id,
-                       'INTERNAL', :reason, :changed_at
+                       (SELECT id FROM actor_type WHERE enumerator = 'INTERNAL'),
+                       :reason, :changed_at
                 FROM client_status AS status
                 WHERE status.enumerator = :target_status
                 """

@@ -58,8 +58,10 @@ def _create_active_account(engine: Engine, client_type: str = "INDIVIDUAL") -> t
             text(
                 """
                 INSERT INTO client_status_event
-                    (client_id, from_status_id, to_status_id, actor_type, reason, created_at)
-                SELECT :client_id, :from_status_id, status.id, 'INTERNAL', NULL, :changed_at
+                    (client_id, from_status_id, to_status_id, actor_type_id, reason, created_at)
+                SELECT :client_id, :from_status_id, status.id,
+                       (SELECT id FROM actor_type WHERE enumerator = 'INTERNAL'),
+                       NULL, :changed_at
                 FROM client_status AS status WHERE status.enumerator = 'ACTIVE'
                 """
             ),

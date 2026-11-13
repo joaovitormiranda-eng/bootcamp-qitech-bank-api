@@ -4,6 +4,7 @@ from sqlalchemy import text
 
 
 ERD_TABLES = {
+    # Tabelas de domínio.
     "client_status",
     "client",
     "individual_client",
@@ -14,11 +15,17 @@ ERD_TABLES = {
     "account_status_event",
     "financial_transaction",
     "transaction_entry",
+    # Tabelas de lookup normalizadas (P1-D/COD-06).
+    "client_type",
+    "transaction_type",
+    "transaction_direction",
+    "entry_type",
+    "actor_type",
 }
 
 
 def test_clean_bootstrap_contains_only_erd_tables(schema_engine):
-    """O SQL principal instala exatamente as dez tabelas aprovadas."""
+    """O SQL principal instala exatamente as tabelas aprovadas do ERD v1.2."""
     with schema_engine.connect() as connection:
         actual_tables = set(
             connection.execute(

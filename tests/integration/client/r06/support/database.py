@@ -75,11 +75,12 @@ def _events(engine: Engine, account_key: str) -> tuple[list[dict], list[dict]]:
             text(
                 """
                 SELECT source.enumerator AS from_status, destination.enumerator AS to_status,
-                       event.actor_type, event.reason, event.created_at
+                       actor_type.enumerator AS actor_type, event.reason, event.created_at
                 FROM account_status_event AS event
                 JOIN account ON account.id = event.account_id
                 LEFT JOIN account_status AS source ON source.id = event.from_status_id
                 JOIN account_status AS destination ON destination.id = event.to_status_id
+                JOIN actor_type ON actor_type.id = event.actor_type_id
                 WHERE account.account_key = CAST(:account_key AS uuid)
                 ORDER BY event.id
                 """
@@ -90,12 +91,13 @@ def _events(engine: Engine, account_key: str) -> tuple[list[dict], list[dict]]:
             text(
                 """
                 SELECT source.enumerator AS from_status, destination.enumerator AS to_status,
-                       event.actor_type, event.reason, event.created_at
+                       actor_type.enumerator AS actor_type, event.reason, event.created_at
                 FROM client_status_event AS event
                 JOIN client ON client.id = event.client_id
                 JOIN account ON account.client_id = client.id
                 LEFT JOIN client_status AS source ON source.id = event.from_status_id
                 JOIN client_status AS destination ON destination.id = event.to_status_id
+                JOIN actor_type ON actor_type.id = event.actor_type_id
                 WHERE account.account_key = CAST(:account_key AS uuid)
                 ORDER BY event.id
                 """

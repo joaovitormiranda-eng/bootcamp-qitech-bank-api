@@ -57,12 +57,13 @@ def test_approve_pending_client_updates_status_and_creates_event(
             text("""
                 SELECT previous_status.enumerator AS from_status,
                        next_status.enumerator AS to_status,
-                       event.actor_type, event.reason
+                       actor_type.enumerator AS actor_type, event.reason
                 FROM client_status_event AS event
                 LEFT JOIN client_status AS previous_status
                   ON previous_status.id = event.from_status_id
                 JOIN client_status AS next_status
                   ON next_status.id = event.to_status_id
+                JOIN actor_type ON actor_type.id = event.actor_type_id
                 WHERE event.client_id = :client_id
                 ORDER BY event.created_at, event.id
             """),
@@ -122,7 +123,7 @@ def test_reject_pending_client_persists_reason_in_status_event(
                 SELECT current_status.enumerator AS status,
                        previous_status.enumerator AS from_status,
                        next_status.enumerator AS to_status,
-                       event.actor_type, event.reason
+                       actor_type.enumerator AS actor_type, event.reason
                 FROM client AS client
                 JOIN client_status AS current_status
                   ON current_status.id = client.status_id
@@ -132,6 +133,7 @@ def test_reject_pending_client_persists_reason_in_status_event(
                   ON previous_status.id = event.from_status_id
                 JOIN client_status AS next_status
                   ON next_status.id = event.to_status_id
+                JOIN actor_type ON actor_type.id = event.actor_type_id
                 WHERE client.client_key = CAST(:client_key AS uuid)
                   AND previous_status.enumerator = 'PENDING'
             """),

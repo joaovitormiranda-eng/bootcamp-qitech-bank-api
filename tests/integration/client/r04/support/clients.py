@@ -14,10 +14,13 @@ def _prepare_client_as_active(
         client = connection.execute(
             text(
                 """
-                SELECT c.id, c.email, c.client_type, s.id AS status_id,
+                SELECT c.id, c.email,
+                       client_type.enumerator AS client_type,
+                       s.id AS status_id,
                        s.enumerator AS status
                 FROM client AS c
                 JOIN client_status AS s ON s.id = c.status_id
+                JOIN client_type ON client_type.id = c.client_type_id
                 WHERE c.client_key = CAST(:client_key AS uuid)
                 """
             ),
@@ -32,10 +35,11 @@ def _prepare_client_as_active(
             text(
                 """
                 SELECT e.from_status_id, destination.enumerator AS to_status,
-                       e.actor_type, e.reason
+                       actor_type.enumerator AS actor_type, e.reason
                 FROM client_status_event AS e
                 JOIN client_status AS destination
                   ON destination.id = e.to_status_id
+                JOIN actor_type ON actor_type.id = e.actor_type_id
                 WHERE e.client_id = :client_id
                 """
             ),
@@ -83,10 +87,11 @@ def _prepare_client_as_active(
                 """
                 INSERT INTO client_status_event (
                     client_id, from_status_id, to_status_id,
-                    actor_type, reason, created_at
+                    actor_type_id, reason, created_at
                 )
                 SELECT :client_id, :from_status_id, destination.id,
-                       'INTERNAL', NULL, :created_at
+                       (SELECT id FROM actor_type WHERE enumerator = 'INTERNAL'),
+                       NULL, :created_at
                 FROM client_status AS destination
                 WHERE destination.enumerator = 'ACTIVE'
                 """
@@ -123,12 +128,13 @@ def _prepare_client_as_active(
                 """
                 SELECT source.enumerator AS from_status,
                        destination.enumerator AS to_status,
-                       event.actor_type, event.reason
+                       actor_type.enumerator AS actor_type, event.reason
                 FROM client_status_event AS event
                 LEFT JOIN client_status AS source
                   ON source.id = event.from_status_id
                 JOIN client_status AS destination
                   ON destination.id = event.to_status_id
+                JOIN actor_type ON actor_type.id = event.actor_type_id
                 WHERE event.client_id = :client_id
                   AND event.from_status_id IS NOT NULL
                 """
@@ -155,10 +161,13 @@ def _transition_client_status(
         client = connection.execute(
             text(
                 """
-                SELECT c.id, c.email, c.client_type, c.status_id,
+                SELECT c.id, c.email,
+                       client_type.enumerator AS client_type,
+                       c.status_id,
                        status.enumerator AS status
                 FROM client AS c
                 JOIN client_status AS status ON status.id = c.status_id
+                JOIN client_type ON client_type.id = c.client_type_id
                 WHERE c.client_key = CAST(:client_key AS uuid)
                 """
             ),
@@ -203,10 +212,11 @@ def _transition_client_status(
                 """
                 INSERT INTO client_status_event (
                     client_id, from_status_id, to_status_id,
-                    actor_type, reason, created_at
+                    actor_type_id, reason, created_at
                 ) VALUES (
                     :client_id, :from_status_id, :to_status_id,
-                    'INTERNAL', :reason, :created_at
+                    (SELECT id FROM actor_type WHERE enumerator = 'INTERNAL'),
+                    :reason, :created_at
                 )
                 """
             ),
@@ -306,10 +316,11 @@ def _close_account_and_inactivate_client(engine: Engine, client_key: str) -> Non
                 """
                 INSERT INTO account_status_event (
                     account_id, from_status_id, to_status_id,
-                    actor_type, reason, created_at
+                    actor_type_id, reason, created_at
                 ) VALUES (
                     :account_id, :from_status_id, :to_status_id,
-                    'INTERNAL', :reason, :created_at
+                    (SELECT id FROM actor_type WHERE enumerator = 'INTERNAL'),
+                    :reason, :created_at
                 )
                 """
             ),
@@ -343,10 +354,11 @@ def _close_account_and_inactivate_client(engine: Engine, client_key: str) -> Non
                 """
                 INSERT INTO client_status_event (
                     client_id, from_status_id, to_status_id,
-                    actor_type, reason, created_at
+                    actor_type_id, reason, created_at
                 ) VALUES (
                     :client_id, :from_status_id, :to_status_id,
-                    'INTERNAL', :reason, :created_at
+                    (SELECT id FROM actor_type WHERE enumerator = 'INTERNAL'),
+                    :reason, :created_at
                 )
                 """
             ),

@@ -15,7 +15,7 @@ class FinancialTransaction(Base):
     request_hash = Column(CHAR(64), nullable=False)
     transaction_type_id = Column(
         BigInteger,
-        ForeignKey(TransactionType.id),
+        ForeignKey(TransactionType.id, ondelete="RESTRICT"),
         nullable=False,
     )
     created_at = Column(DateTime(timezone=True), nullable=False)
