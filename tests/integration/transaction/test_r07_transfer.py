@@ -44,12 +44,14 @@ def test_transfer_returns_created_transaction(
                 SELECT account.account_key, account.client_id,
                        account.balance_cents,
                        account_status.enumerator AS status,
-                       client.client_type
+                       client_type.enumerator AS client_type
                 FROM account
                 JOIN account_status
                   ON account_status.id = account.status_id
                 JOIN client
                   ON client.id = account.client_id
+                JOIN client_type
+                  ON client_type.id = client.client_type_id
                 WHERE account.account_key IN (
                     :source_account_key,
                     :target_account_key

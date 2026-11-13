@@ -125,9 +125,10 @@ def _create_active_account(engine: Engine, client_type: str) -> tuple[str, str]:
                 SELECT client.id, client.status_id
                 FROM client
                 JOIN client_status AS status ON status.id = client.status_id
+                JOIN client_type ON client_type.id = client.client_type_id
                 WHERE client.client_key = CAST(:client_key AS uuid)
                   AND client.email = :email
-                  AND client.client_type = :client_type
+                  AND client_type.enumerator = :client_type
                   AND status.enumerator = 'PENDING'
                 """
             ),
@@ -154,9 +155,11 @@ def _create_active_account(engine: Engine, client_type: str) -> tuple[str, str]:
             text(
                 """
                 INSERT INTO client_status_event (
-                    client_id, from_status_id, to_status_id, actor_type, reason, created_at
+                    client_id, from_status_id, to_status_id, actor_type_id, reason, created_at
                 )
-                SELECT :client_id, :from_status_id, status.id, 'INTERNAL', NULL, :created_at
+                SELECT :client_id, :from_status_id, status.id,
+                       (SELECT id FROM actor_type WHERE enumerator = 'INTERNAL'),
+                       NULL, :created_at
                 FROM client_status AS status
                 WHERE status.enumerator = 'ACTIVE'
                 """
@@ -246,9 +249,11 @@ def _transition_account_status(engine: Engine, account_key: str, target_status: 
             text(
                 """
                 INSERT INTO account_status_event (
-                    account_id, from_status_id, to_status_id, actor_type, reason, created_at
+                    account_id, from_status_id, to_status_id, actor_type_id, reason, created_at
                 )
-                SELECT :account_id, :from_status_id, status.id, 'INTERNAL', :reason, :created_at
+                SELECT :account_id, :from_status_id, status.id,
+                       (SELECT id FROM actor_type WHERE enumerator = 'INTERNAL'),
+                       :reason, :created_at
                 FROM account_status AS status
                 WHERE status.enumerator = :target_status
                 """

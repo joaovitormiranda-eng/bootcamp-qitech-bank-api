@@ -19,7 +19,10 @@ class TestFinancialTransactionSchema:
     """Identidade, tipo e chave de controle das operações financeiras."""
 
     def test_columns_and_primary_key(self, schema_engine):
-        """As chaves são UUID e o hash da requisição ocupa 64 caracteres."""
+        """As chaves são UUID e o hash da requisição ocupa 64 caracteres.
+
+        P1-D/COD-06: o tipo de operação é a FK `transaction_type_id`.
+        """
         assert_columns_and_primary_key(
             schema_engine,
             "financial_transaction",
@@ -28,10 +31,18 @@ class TestFinancialTransactionSchema:
                 "transaction_key": ("uuid", None, "NO"),
                 "request_control_key": ("uuid", None, "NO"),
                 "request_hash": ("character", 64, "NO"),
-                "transaction_type": ("character varying", 20, "NO"),
+                "transaction_type_id": ("bigint", None, "NO"),
                 "created_at": ("timestamp with time zone", None, "NO"),
             },
             ["id"],
+        )
+
+    def test_transaction_type_foreign_key_is_restricted(self, schema_engine):
+        """transaction_type_id referencia a lookup sem exclusão em cascata."""
+        assert_foreign_keys(
+            schema_engine,
+            "financial_transaction",
+            {("transaction_type_id", "transaction_type", "id", "RESTRICT")},
         )
 
     @pytest.mark.parametrize("column_name", ["transaction_key", "request_control_key"])
@@ -41,15 +52,35 @@ class TestFinancialTransactionSchema:
 
     @pytest.mark.parametrize("transaction_type", ["DEPOSIT", "TRANSFER"])
     def test_accepts_approved_transaction_type(self, db_connection, transaction_type):
-        """DEPOSIT e TRANSFER são os dois tipos aceitos pelo schema v1.1."""
+        """DEPOSIT e TRANSFER são os dois tipos aceitos pelo schema v1.2."""
         transaction_id = create_transaction(db_connection, transaction_type=transaction_type)
         assert transaction_id > 0
 
     def test_rejects_unknown_transaction_type(self, db_connection):
-        """WITHDRAW não faz parte do domínio fechado da v1.1."""
+        """WITHDRAW não está na lookup; a FK rejeita o id inexistente (23503)."""
+        missing_type_id = db_connection.execute(
+            text("SELECT COALESCE(MAX(id), 0) + 999 FROM transaction_type")
+        ).scalar_one()
         with pytest.raises(IntegrityError) as error:
-            create_transaction(db_connection, transaction_type="WITHDRAW")
-        assert error.value.orig.pgcode == "23514"
+            db_connection.execute(
+                text("""
+                    INSERT INTO financial_transaction (
+                        transaction_key, request_control_key, request_hash,
+                        transaction_type_id, created_at
+                    )
+                    VALUES (
+                        :transaction_key, :request_control_key, :request_hash,
+                        :transaction_type_id, NOW()
+                    )
+                """),
+                {
+                    "transaction_key": str(uuid4()),
+                    "request_control_key": str(uuid4()),
+                    "request_hash": "0" * 64,
+                    "transaction_type_id": missing_type_id,
+                },
+            )
+        assert error.value.orig.pgcode == "23503"  # FK violation
 
     def test_request_control_key_is_globally_unique(self, db_connection):
         """Uma chave de idempotência não pode ser reutilizada em outro tipo."""
@@ -68,16 +99,22 @@ class TestTransactionEntrySchema:
     """Lançamentos positivos ligados à operação e à conta afetada."""
 
     def test_columns_and_primary_key(self, schema_engine):
-        """Valor e saldo posterior são BIGINT; data possui fuso horário."""
+        """Valor e saldo posterior são BIGINT; data possui fuso horário.
+
+        P1-D/COD-05: a entry ganha a chave pública `entry_key` (UUID), mantendo
+        `id` como PK interna.
+        P1-D/COD-06: `direction` e `entry_type` viram FKs `*_id`.
+        """
         assert_columns_and_primary_key(
             schema_engine,
             "transaction_entry",
             {
                 "id": ("bigint", None, "NO"),
+                "entry_key": ("uuid", None, "NO"),
                 "transaction_id": ("bigint", None, "NO"),
                 "account_id": ("bigint", None, "NO"),
-                "direction": ("character varying", 10, "NO"),
-                "entry_type": ("character varying", 20, "NO"),
+                "direction_id": ("bigint", None, "NO"),
+                "entry_type_id": ("bigint", None, "NO"),
                 "amount_cents": ("bigint", None, "NO"),
                 "balance_after_cents": ("bigint", None, "NO"),
                 "created_at": ("timestamp with time zone", None, "NO"),
@@ -85,14 +122,20 @@ class TestTransactionEntrySchema:
             ["id"],
         )
 
+    def test_entry_key_is_unique(self, schema_engine):
+        """A chave pública da entry tem constraint UNIQUE própria (COD-05)."""
+        assert_unique(schema_engine, "transaction_entry", "entry_key")
+
     def test_foreign_keys_are_restricted(self, schema_engine):
-        """Lançamento exige operação e conta, sem exclusão em cascata."""
+        """Lançamento exige operação, conta, direção e natureza, sem cascata."""
         assert_foreign_keys(
             schema_engine,
             "transaction_entry",
             {
                 ("transaction_id", "financial_transaction", "id", "RESTRICT"),
                 ("account_id", "account", "id", "RESTRICT"),
+                ("direction_id", "transaction_direction", "id", "RESTRICT"),
+                ("entry_type_id", "entry_type", "id", "RESTRICT"),
             },
         )
 
@@ -155,14 +198,12 @@ class TestTransactionEntrySchema:
     @pytest.mark.parametrize(
         "invalid_entry",
         [
-            pytest.param({"direction": "OTHER"}, id="direction"),
-            pytest.param({"entry_type": "OTHER"}, id="entry_type"),
             pytest.param({"amount_cents": 0}, id="amount_zero"),
             pytest.param({"balance_after_cents": -1}, id="negative_balance"),
         ],
     )
     def test_rejects_invalid_values(self, db_connection, invalid_entry):
-        """CHECKs recusam direção/tipo desconhecidos e valores fora do domínio."""
+        """CHECKs recusam valores monetários fora do domínio (amount/saldo)."""
         account_id = create_account(db_connection)
         _set_balance(db_connection, account_id, 1)
         transaction_id = create_transaction(db_connection)
@@ -174,6 +215,66 @@ class TestTransactionEntrySchema:
                 **invalid_entry,
             )
         assert error.value.orig.pgcode == "23514"
+
+    def test_rejects_unknown_direction(self, db_connection):
+        """P1-D/COD-06: direção fora da lookup dispara violação de FK (23503)."""
+        account_id = create_account(db_connection)
+        _set_balance(db_connection, account_id, 1)
+        transaction_id = create_transaction(db_connection)
+        missing_id = db_connection.execute(
+            text("SELECT COALESCE(MAX(id), 0) + 999 FROM transaction_direction")
+        ).scalar_one()
+        with pytest.raises(IntegrityError) as error:
+            db_connection.execute(
+                text("""
+                    INSERT INTO transaction_entry (
+                        entry_key, transaction_id, account_id, direction_id,
+                        entry_type_id, amount_cents, balance_after_cents, created_at
+                    )
+                    VALUES (
+                        :entry_key, :transaction_id, :account_id, :missing_id,
+                        (SELECT id FROM entry_type WHERE enumerator = 'PRINCIPAL'),
+                        1, 1, NOW()
+                    )
+                """),
+                {
+                    "entry_key": str(uuid4()),
+                    "transaction_id": transaction_id,
+                    "account_id": account_id,
+                    "missing_id": missing_id,
+                },
+            )
+        assert error.value.orig.pgcode == "23503"  # FK violation
+
+    def test_rejects_unknown_entry_type(self, db_connection):
+        """P1-D/COD-06: natureza fora da lookup dispara violação de FK (23503)."""
+        account_id = create_account(db_connection)
+        _set_balance(db_connection, account_id, 1)
+        transaction_id = create_transaction(db_connection)
+        missing_id = db_connection.execute(
+            text("SELECT COALESCE(MAX(id), 0) + 999 FROM entry_type")
+        ).scalar_one()
+        with pytest.raises(IntegrityError) as error:
+            db_connection.execute(
+                text("""
+                    INSERT INTO transaction_entry (
+                        entry_key, transaction_id, account_id, direction_id,
+                        entry_type_id, amount_cents, balance_after_cents, created_at
+                    )
+                    VALUES (
+                        :entry_key, :transaction_id, :account_id,
+                        (SELECT id FROM transaction_direction WHERE enumerator = 'CREDIT'),
+                        :missing_id, 1, 1, NOW()
+                    )
+                """),
+                {
+                    "entry_key": str(uuid4()),
+                    "transaction_id": transaction_id,
+                    "account_id": account_id,
+                    "missing_id": missing_id,
+                },
+            )
+        assert error.value.orig.pgcode == "23503"  # FK violation
 
 
 def _set_balance(connection, account_id, balance_cents):
