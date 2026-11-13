@@ -70,7 +70,9 @@ def ephemeral_database():
             "Não foi possível criar o banco efêmero (cluster de teste indisponível)."
         )
 
-    engine = create_engine(str(ephemeral_url))
+    # render_as_string(hide_password=False): str(URL) mascara a senha como
+    # '***', o que faria a reconexão falhar com erro de autenticação.
+    engine = create_engine(ephemeral_url.render_as_string(hide_password=False))
     try:
         yield engine
     finally:
