@@ -5,6 +5,7 @@ from sqlalchemy.engine import Engine
 
 from tests.integration.transaction.support import (
     create_account,
+    open_funded_account_via_api,
     send_deposit,
     send_transfer,
 )
@@ -31,10 +32,8 @@ def _get_statement(
     )
 
 
-def test_statement_paginates_real_history_with_limit_plus_one(
-    api_database_engine: Engine,
-) -> None:
-    account_key = create_account(api_database_engine)
+def test_statement_paginates_real_history_with_limit_plus_one() -> None:
+    account_key = open_funded_account_via_api()
     transaction_keys = []
     for amount_cents in (1_000, 2_000, 3_000, 4_000, 5_000):
         response = send_deposit(account_key, uuid4(), amount_cents=amount_cents)
@@ -75,10 +74,8 @@ def test_statement_paginates_real_history_with_limit_plus_one(
     assert returned_keys == transaction_keys
 
 
-def test_statement_returns_empty_page_beyond_end(
-    api_database_engine: Engine,
-) -> None:
-    account_key = create_account(api_database_engine)
+def test_statement_returns_empty_page_beyond_end() -> None:
+    account_key = open_funded_account_via_api()
     response = send_deposit(account_key, uuid4(), amount_cents=1_000)
     assert response.response_status == 201
 
@@ -98,12 +95,18 @@ def test_statement_returns_empty_page_beyond_end(
 def test_statement_can_split_transfer_principal_and_fee_between_pages(
     api_database_engine: Engine,
 ) -> None:
+    # Saldo de abertura da origem semeado por SQL (sem lançamento) porque o
+    # teste pagina (limit=1) o extrato da ORIGEM esperando exatamente duas
+    # linhas: página 1 = PRINCIPAL (next_page=2) e página 2 = FEE
+    # (next_page=None). Um DEPOSIT de funding seria a linha mais antiga e
+    # deslocaria os limites de página. A API não permite saldo de abertura
+    # sem depósito.
     source_account_key = create_account(
         api_database_engine,
         client_type="INDIVIDUAL",
         balance_cents=100_000,
     )
-    target_account_key = create_account(api_database_engine)
+    target_account_key = open_funded_account_via_api()
     transfer_response = send_transfer(
         source_account_key,
         target_account_key,
@@ -130,7 +133,10 @@ def test_statement_can_split_transfer_principal_and_fee_between_pages(
 def test_statement_read_does_not_change_financial_state(
     api_database_engine: Engine,
 ) -> None:
-    account_key = create_account(api_database_engine)
+    # Persistência legítima: prova que a leitura do extrato (R08) não altera
+    # nenhuma linha. A conta é preparada por API; o SQL fica restrito à
+    # comparação antes/depois do estado persistido.
+    account_key = open_funded_account_via_api()
     deposit_response = send_deposit(account_key, uuid4(), amount_cents=50_000)
     assert deposit_response.response_status == 201
 

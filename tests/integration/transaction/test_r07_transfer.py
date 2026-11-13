@@ -1,4 +1,4 @@
-"""Primeiro ciclo HTTP da R07: happy path de TRANSFER."""
+"""Primeiro ciclo HTTP da R07: happy path de TRANSFER (black-box + hash SQL)."""
 
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -10,6 +10,9 @@ from sqlalchemy.engine import Engine
 from tests.integration.transaction.support import (
     TRANSACTION_RESPONSE_FIELDS,
     create_account,
+    get_account_via_api,
+    list_statement_via_api,
+    open_funded_account_via_api,
 )
 from tests.utils import INTERNAL_TOKEN
 from tests.utils.requisition import ClientRequisition
@@ -18,18 +21,24 @@ from tests.utils.requisition import ClientRequisition
 def test_transfer_returns_created_transaction(
     api_database_engine: Engine,
 ) -> None:
+    # A origem é semeada por SQL (create_account define balance_cents de
+    # abertura SEM lançamento) porque este teste afirma que o extrato da
+    # ORIGEM é EXATAMENTE [PRINCIPAL, FEE]. Um funding via DEPOSIT deixaria
+    # um CRÉDITO visível no próprio extrato da origem; a API pública não
+    # permite saldo de abertura sem depósito. O destino (saldo 0, sem
+    # depósito) permanece preparado via API.
     source_account_key = create_account(
         api_database_engine,
         balance_cents=100_000,
     )
-    target_account_key = create_account(
-        api_database_engine,
-        balance_cents=0,
-    )
+    target_account_key = open_funded_account_via_api(balance_cents=0)
 
+    # Sanidade de setup preservada do teste original: tipos/ids distintos,
+    # origem INDIVIDUAL, ambos ACTIVE, saldos iniciais corretos. client_type
+    # e client_id não têm projeção em R05, logo a leitura é SQL mínima.
     with api_database_engine.connect() as connection:
         connection.exec_driver_sql("SET TRANSACTION READ ONLY")
-        accounts = connection.execute(
+        setup_accounts = connection.execute(
             text(
                 """
                 SELECT account.account_key, account.client_id,
@@ -53,19 +62,19 @@ def test_transfer_returns_created_transaction(
             },
         ).mappings().all()
 
-    accounts_by_key = {
-        str(account["account_key"]): account for account in accounts
+    setup_by_key = {
+        str(account["account_key"]): account for account in setup_accounts
     }
-    source = accounts_by_key[source_account_key]
-    target = accounts_by_key[target_account_key]
+    source_setup = setup_by_key[source_account_key]
+    target_setup = setup_by_key[target_account_key]
 
     assert source_account_key != target_account_key
-    assert source["client_id"] != target["client_id"]
-    assert source["client_type"] == "INDIVIDUAL"
-    assert source["status"] == "ACTIVE"
-    assert source["balance_cents"] == 100_000
-    assert target["status"] == "ACTIVE"
-    assert target["balance_cents"] == 0
+    assert source_setup["client_id"] != target_setup["client_id"]
+    assert source_setup["client_type"] == "INDIVIDUAL"
+    assert source_setup["status"] == "ACTIVE"
+    assert source_setup["balance_cents"] == 100_000
+    assert target_setup["status"] == "ACTIVE"
+    assert target_setup["balance_cents"] == 0
 
     idempotency_key = uuid4()
     response = ClientRequisition.send(
@@ -116,20 +125,104 @@ def test_transfer_returns_created_transaction(
         parsed_created_at
     )
 
+    # Movimentos observáveis via R08: origem com PRINCIPAL+FEE, destino com
+    # o CREDIT, cada um com o balance_after_cents publicado.
+    source_entries = list_statement_via_api(
+        source_account_key,
+        query_params={"order_by": "asc"},
+    )["data"]
+    target_entries = list_statement_via_api(
+        target_account_key,
+        query_params={"order_by": "asc"},
+    )["data"]
+
+    assert [
+        (
+            entry["transaction_key"],
+            entry["direction"],
+            entry["entry_type"],
+            entry["amount_cents"],
+            entry["balance_after_cents"],
+            entry["counterparty_account_key"],
+            entry["created_at"],
+        )
+        for entry in source_entries
+    ] == [
+        (
+            response_body["transaction_key"],
+            "DEBIT",
+            "PRINCIPAL",
+            50_000,
+            50_000,
+            target_account_key,
+            created_at,
+        ),
+        (
+            response_body["transaction_key"],
+            "DEBIT",
+            "FEE",
+            250,
+            49_750,
+            None,
+            created_at,
+        ),
+    ]
+    assert [
+        (
+            entry["transaction_key"],
+            entry["direction"],
+            entry["entry_type"],
+            entry["amount_cents"],
+            entry["balance_after_cents"],
+            entry["counterparty_account_key"],
+            entry["created_at"],
+        )
+        for entry in target_entries
+    ] == [
+        (
+            response_body["transaction_key"],
+            "CREDIT",
+            "PRINCIPAL",
+            50_000,
+            50_000,
+            source_account_key,
+            created_at,
+        ),
+    ]
+
+    persisted_source = get_account_via_api(source_account_key)
+    persisted_target = get_account_via_api(target_account_key)
+
+    assert persisted_source["balance_cents"] == 49_750
+    assert persisted_target["balance_cents"] == 50_000
+    # account.updated_at acompanha o created_at da transação (ambos via HTTP).
+    assert persisted_source["updated_at"] == created_at
+    assert persisted_target["updated_at"] == created_at
+    assert source_entries[1]["balance_after_cents"] == (
+        persisted_source["balance_cents"]
+    )
+    assert target_entries[0]["balance_after_cents"] == (
+        persisted_target["balance_cents"]
+    )
+
+    delta_source = persisted_source["balance_cents"] - 100_000
+    delta_target = persisted_target["balance_cents"] - 0
+    assert delta_source + delta_target == -response_body["fee_cents"]
+
+    # request_hash (SHA-256) não tem projeção HTTP: leitura SQL mínima
+    # apenas para essa asserção de persistência.
     canonical_request = (
         f"TRANSFER|{source_account_key}|{target_account_key}|50000"
     )
     expected_request_hash = sha256(
         canonical_request.encode("utf-8")
     ).hexdigest()
-
     with api_database_engine.connect() as connection:
         connection.exec_driver_sql("SET TRANSACTION READ ONLY")
-        transactions = connection.execute(
+        persisted_hash = connection.execute(
             text(
                 """
-                SELECT id, transaction_key, request_control_key, request_hash,
-                       transaction_type, created_at
+                SELECT transaction_key, request_hash
                 FROM financial_transaction
                 WHERE request_control_key = :request_control_key
                 """
@@ -137,90 +230,8 @@ def test_transfer_returns_created_transaction(
             {"request_control_key": idempotency_key},
         ).mappings().all()
 
-    assert len(transactions) == 1
-    transaction = transactions[0]
-    assert str(transaction["transaction_key"]) == response_body[
-        "transaction_key"
-    ]
-    assert transaction["request_control_key"] == idempotency_key
-    assert transaction["request_hash"] == expected_request_hash
-    assert transaction["transaction_type"] == "TRANSFER"
-    assert transaction["created_at"] == parsed_created_at
-
-    with api_database_engine.connect() as connection:
-        connection.exec_driver_sql("SET TRANSACTION READ ONLY")
-        entries = connection.execute(
-            text(
-                """
-                SELECT entry.direction, entry.entry_type,
-                       entry.amount_cents, entry.balance_after_cents,
-                       entry.created_at, account.account_key
-                FROM transaction_entry AS entry
-                JOIN account ON account.id = entry.account_id
-                WHERE entry.transaction_id = :transaction_id
-                ORDER BY entry.id
-                """
-            ),
-            {"transaction_id": transaction["id"]},
-        ).mappings().all()
-
-    assert len(entries) == 3
-    assert [
-        (
-            str(entry["account_key"]),
-            entry["direction"],
-            entry["entry_type"],
-            entry["amount_cents"],
-            entry["balance_after_cents"],
-        )
-        for entry in entries
-    ] == [
-        (source_account_key, "DEBIT", "PRINCIPAL", 50_000, 50_000),
-        (source_account_key, "DEBIT", "FEE", 250, 49_750),
-        (target_account_key, "CREDIT", "PRINCIPAL", 50_000, 50_000),
-    ]
-    assert all(
-        entry["created_at"] == transaction["created_at"]
-        for entry in entries
+    assert len(persisted_hash) == 1
+    assert str(persisted_hash[0]["transaction_key"]) == (
+        response_body["transaction_key"]
     )
-
-    with api_database_engine.connect() as connection:
-        connection.exec_driver_sql("SET TRANSACTION READ ONLY")
-        persisted_accounts = connection.execute(
-            text(
-                """
-                SELECT account_key, balance_cents, updated_at
-                FROM account
-                WHERE account_key IN (
-                    :source_account_key,
-                    :target_account_key
-                )
-                """
-            ),
-            {
-                "source_account_key": UUID(source_account_key),
-                "target_account_key": UUID(target_account_key),
-            },
-        ).mappings().all()
-
-    persisted_by_key = {
-        str(account["account_key"]): account
-        for account in persisted_accounts
-    }
-    persisted_source = persisted_by_key[source_account_key]
-    persisted_target = persisted_by_key[target_account_key]
-
-    assert persisted_source["balance_cents"] == 49_750
-    assert persisted_target["balance_cents"] == 50_000
-    assert persisted_source["updated_at"] == transaction["created_at"]
-    assert persisted_target["updated_at"] == transaction["created_at"]
-    assert entries[1]["balance_after_cents"] == persisted_source[
-        "balance_cents"
-    ]
-    assert entries[2]["balance_after_cents"] == persisted_target[
-        "balance_cents"
-    ]
-
-    delta_source = persisted_source["balance_cents"] - 100_000
-    delta_target = persisted_target["balance_cents"] - 0
-    assert delta_source + delta_target == -response_body["fee_cents"]
+    assert persisted_hash[0]["request_hash"] == expected_request_hash
