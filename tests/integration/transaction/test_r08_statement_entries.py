@@ -5,6 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from tests.integration.transaction.support import (
+    create_account,
     open_funded_account_via_api,
     send_deposit,
     send_transfer,
@@ -53,8 +54,17 @@ def test_statement_returns_deposit_entry_from_persisted_history() -> None:
     }
 
 
-def test_statement_returns_transfer_principal_and_fee_for_source() -> None:
-    source_account_key = open_funded_account_via_api(
+def test_statement_returns_transfer_principal_and_fee_for_source(
+    api_database_engine: Engine,
+) -> None:
+    # Saldo de abertura da origem semeado por SQL (sem lançamento) porque o
+    # teste afirma que o extrato da ORIGEM é EXATAMENTE [PRINCIPAL, FEE] com
+    # next_page None; um DEPOSIT de funding deixaria um CRÉDITO extra no
+    # próprio extrato da origem. A API não oferece saldo de abertura sem
+    # depósito, então o SQL de abertura é a fixture fiel do formato do
+    # extrato. O destino permanece preparado via API.
+    source_account_key = create_account(
+        api_database_engine,
         client_type="INDIVIDUAL",
         balance_cents=100_000,
     )

@@ -63,9 +63,14 @@ def test_transfer_rejects_structurally_invalid_body(
 
 @pytest.mark.parametrize("invalid_amount", [999, 0])
 def test_transfer_rejects_amount_below_minimum(
+    api_database_engine: Engine,
     invalid_amount: int,
 ) -> None:
-    source_key = open_funded_account_via_api(balance_cents=100_000)
+    # Saldo de abertura semeado por SQL (sem lançamento) porque o teste
+    # afirma que o extrato da ORIGEM permanece VAZIO (data == []) após a
+    # rejeição; um DEPOSIT de funding deixaria um CRÉDITO visível no extrato
+    # da origem. A API não oferece saldo de abertura sem depósito.
+    source_key = create_account(api_database_engine, balance_cents=100_000)
     target_key = open_funded_account_via_api()
     idempotency_key = uuid4()
 
@@ -83,8 +88,13 @@ def test_transfer_rejects_amount_below_minimum(
     assert list_statement_via_api(target_key)["data"] == []
 
 
-def test_transfer_rejects_self_transfer_without_consuming_key() -> None:
-    account_key = open_funded_account_via_api(balance_cents=100_000)
+def test_transfer_rejects_self_transfer_without_consuming_key(
+    api_database_engine: Engine,
+) -> None:
+    # Saldo de abertura semeado por SQL (sem lançamento): o teste afirma que
+    # o extrato permanece VAZIO (data == []) após a rejeição; um DEPOSIT de
+    # funding deixaria um CRÉDITO no extrato.
+    account_key = create_account(api_database_engine, balance_cents=100_000)
     idempotency_key = uuid4()
 
     response = send_transfer(
@@ -213,8 +223,13 @@ def test_transfer_rejects_non_active_target(
     assert state["entries"] == []
 
 
-def test_transfer_rejects_insufficient_balance() -> None:
-    source_key = open_funded_account_via_api(balance_cents=50_249)
+def test_transfer_rejects_insufficient_balance(
+    api_database_engine: Engine,
+) -> None:
+    # Saldo de abertura semeado por SQL (sem lançamento): o teste afirma que
+    # o extrato da ORIGEM permanece VAZIO (data == []) após a rejeição; um
+    # DEPOSIT de funding deixaria um CRÉDITO no próprio extrato da origem.
+    source_key = create_account(api_database_engine, balance_cents=50_249)
     target_key = open_funded_account_via_api()
     idempotency_key = uuid4()
 
@@ -227,8 +242,14 @@ def test_transfer_rejects_insufficient_balance() -> None:
     assert list_statement_via_api(target_key)["data"] == []
 
 
-def test_transfer_accepts_exact_amount_plus_fee_balance() -> None:
-    source_key = open_funded_account_via_api(balance_cents=50_250)
+def test_transfer_accepts_exact_amount_plus_fee_balance(
+    api_database_engine: Engine,
+) -> None:
+    # Saldo de abertura semeado por SQL (sem lançamento) porque o teste
+    # afirma que o extrato da ORIGEM é EXATAMENTE [PRINCIPAL, FEE]; um
+    # DEPOSIT de funding adicionaria um terceiro lançamento. O saldo exato
+    # (amount + fee) é preservado.
+    source_key = create_account(api_database_engine, balance_cents=50_250)
     target_key = open_funded_account_via_api()
     idempotency_key = uuid4()
 
@@ -254,8 +275,13 @@ def test_transfer_accepts_exact_amount_plus_fee_balance() -> None:
     assert target_entries[0]["entry_type"] == "PRINCIPAL"
 
 
-def test_transfer_rejects_amount_above_bigint() -> None:
-    source_key = open_funded_account_via_api(balance_cents=100_000)
+def test_transfer_rejects_amount_above_bigint(
+    api_database_engine: Engine,
+) -> None:
+    # Saldo de abertura semeado por SQL (sem lançamento): o teste afirma que
+    # o extrato da ORIGEM permanece VAZIO (data == []) após a rejeição; um
+    # DEPOSIT de funding deixaria um CRÉDITO no próprio extrato da origem.
+    source_key = create_account(api_database_engine, balance_cents=100_000)
     target_key = open_funded_account_via_api()
     idempotency_key = uuid4()
 

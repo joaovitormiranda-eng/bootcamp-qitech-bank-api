@@ -2,7 +2,10 @@
 
 from uuid import uuid4
 
+from sqlalchemy.engine import Engine
+
 from tests.integration.transaction.support import (
+    create_account,
     get_account_via_api,
     list_statement_via_api,
     open_funded_account_via_api,
@@ -12,8 +15,16 @@ from tests.utils import INTERNAL_TOKEN
 from tests.utils.requisition import ClientRequisition
 
 
-def test_transfer_replays_original_transaction_without_new_movement() -> None:
-    source_key = open_funded_account_via_api(balance_cents=100_000)
+def test_transfer_replays_original_transaction_without_new_movement(
+    api_database_engine: Engine,
+) -> None:
+    # Saldo de abertura da origem semeado por SQL (sem lançamento) porque o
+    # teste afirma que o extrato da ORIGEM é EXATAMENTE [PRINCIPAL, FEE]
+    # (len==2) e que há uma única transaction_key em origem+destino. Um
+    # DEPOSIT de funding deixaria um CRÉDITO extra, com outra
+    # transaction_key, no próprio extrato da origem. A API não oferece saldo
+    # de abertura sem depósito.
+    source_key = create_account(api_database_engine, balance_cents=100_000)
     target_key = open_funded_account_via_api()
     idempotency_key = uuid4()
 
@@ -52,8 +63,13 @@ def test_transfer_replays_original_transaction_without_new_movement() -> None:
     } == {original_response.response_json["transaction_key"]}
 
 
-def test_transfer_rejects_same_key_for_different_intention() -> None:
-    source_key = open_funded_account_via_api(balance_cents=100_000)
+def test_transfer_rejects_same_key_for_different_intention(
+    api_database_engine: Engine,
+) -> None:
+    # Saldo de abertura semeado por SQL (sem lançamento): o teste afirma
+    # len(source_entries) == 2, logo um DEPOSIT de funding poluiria o
+    # extrato da origem com um terceiro lançamento.
+    source_key = create_account(api_database_engine, balance_cents=100_000)
     target_key = open_funded_account_via_api()
     idempotency_key = uuid4()
 
@@ -84,8 +100,12 @@ def test_transfer_rejects_same_key_for_different_intention() -> None:
 
 
 def test_transfer_replay_survives_real_r06_closure_but_new_operation_does_not(
+    api_database_engine: Engine,
 ) -> None:
-    source_key = open_funded_account_via_api(balance_cents=50_250)
+    # Saldo de abertura semeado por SQL (sem lançamento): o teste afirma
+    # len(source_entries) == 2 e uma única transaction_key em origem+destino
+    # após o replay; um DEPOSIT de funding adicionaria um lançamento extra.
+    source_key = create_account(api_database_engine, balance_cents=50_250)
     target_key = open_funded_account_via_api()
     original_key = uuid4()
 

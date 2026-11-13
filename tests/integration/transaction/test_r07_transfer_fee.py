@@ -3,8 +3,10 @@
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.engine import Engine
 
 from tests.integration.transaction.support import (
+    create_account,
     get_account_via_api,
     list_statement_via_api,
     open_funded_account_via_api,
@@ -22,13 +24,22 @@ from tests.integration.transaction.support import (
     ],
 )
 def test_transfer_fee_depends_only_on_source_client_type(
+    api_database_engine: Engine,
     source_type: str,
     target_type: str,
     expected_fee_cents: int,
 ) -> None:
     amount_cents = 50_000
     initial_source_balance = 100_000
-    source_key = open_funded_account_via_api(
+    # O saldo inicial da origem é semeado por SQL (create_account define o
+    # balance_cents de abertura SEM produzir lançamento), porque este teste
+    # afirma que o extrato da ORIGEM contém EXATAMENTE [PRINCIPAL, FEE]. Um
+    # funding via DEPOSIT (open_funded_account_via_api) adicionaria um
+    # CRÉDITO visível ao extrato da própria origem, poluindo a asserção. A
+    # API pública não permite abrir conta com saldo inicial sem depósito,
+    # logo o SQL de abertura é a fixture fiel de "formato de extrato".
+    source_key = create_account(
+        api_database_engine,
         client_type=source_type,
         balance_cents=initial_source_balance,
     )
@@ -91,12 +102,17 @@ def test_transfer_fee_depends_only_on_source_client_type(
     ],
 )
 def test_transfer_persists_source_pricing_profile_fee(
+    api_database_engine: Engine,
     source_type: str,
     amount_cents: int,
     expected_fee_cents: int,
 ) -> None:
     initial_source_balance = amount_cents + expected_fee_cents + 10_000
-    source_key = open_funded_account_via_api(
+    # Saldo inicial semeado por SQL (sem lançamento) porque o teste afirma
+    # len(source_entries) == 2 e [PRINCIPAL, FEE] exatos no extrato da
+    # origem; um DEPOSIT de funding adicionaria um terceiro lançamento.
+    source_key = create_account(
+        api_database_engine,
         client_type=source_type,
         balance_cents=initial_source_balance,
     )

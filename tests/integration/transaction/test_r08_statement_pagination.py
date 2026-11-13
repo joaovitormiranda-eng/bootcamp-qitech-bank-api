@@ -4,6 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from tests.integration.transaction.support import (
+    create_account,
     open_funded_account_via_api,
     send_deposit,
     send_transfer,
@@ -92,8 +93,16 @@ def test_statement_returns_empty_page_beyond_end() -> None:
 
 
 def test_statement_can_split_transfer_principal_and_fee_between_pages(
+    api_database_engine: Engine,
 ) -> None:
-    source_account_key = open_funded_account_via_api(
+    # Saldo de abertura da origem semeado por SQL (sem lançamento) porque o
+    # teste pagina (limit=1) o extrato da ORIGEM esperando exatamente duas
+    # linhas: página 1 = PRINCIPAL (next_page=2) e página 2 = FEE
+    # (next_page=None). Um DEPOSIT de funding seria a linha mais antiga e
+    # deslocaria os limites de página. A API não permite saldo de abertura
+    # sem depósito.
+    source_account_key = create_account(
+        api_database_engine,
         client_type="INDIVIDUAL",
         balance_cents=100_000,
     )

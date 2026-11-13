@@ -9,6 +9,7 @@ from sqlalchemy.engine import Engine
 
 from tests.integration.transaction.support import (
     TRANSACTION_RESPONSE_FIELDS,
+    create_account,
     get_account_via_api,
     list_statement_via_api,
     open_funded_account_via_api,
@@ -20,18 +21,60 @@ from tests.utils.requisition import ClientRequisition
 def test_transfer_returns_created_transaction(
     api_database_engine: Engine,
 ) -> None:
-    source_account_key = open_funded_account_via_api(balance_cents=100_000)
+    # A origem é semeada por SQL (create_account define balance_cents de
+    # abertura SEM lançamento) porque este teste afirma que o extrato da
+    # ORIGEM é EXATAMENTE [PRINCIPAL, FEE]. Um funding via DEPOSIT deixaria
+    # um CRÉDITO visível no próprio extrato da origem; a API pública não
+    # permite saldo de abertura sem depósito. O destino (saldo 0, sem
+    # depósito) permanece preparado via API.
+    source_account_key = create_account(
+        api_database_engine,
+        balance_cents=100_000,
+    )
     target_account_key = open_funded_account_via_api(balance_cents=0)
 
-    source_snapshot = get_account_via_api(source_account_key)
-    target_snapshot = get_account_via_api(target_account_key)
+    # Sanidade de setup preservada do teste original: tipos/ids distintos,
+    # origem INDIVIDUAL, ambos ACTIVE, saldos iniciais corretos. client_type
+    # e client_id não têm projeção em R05, logo a leitura é SQL mínima.
+    with api_database_engine.connect() as connection:
+        connection.exec_driver_sql("SET TRANSACTION READ ONLY")
+        setup_accounts = connection.execute(
+            text(
+                """
+                SELECT account.account_key, account.client_id,
+                       account.balance_cents,
+                       account_status.enumerator AS status,
+                       client.client_type
+                FROM account
+                JOIN account_status
+                  ON account_status.id = account.status_id
+                JOIN client
+                  ON client.id = account.client_id
+                WHERE account.account_key IN (
+                    :source_account_key,
+                    :target_account_key
+                )
+                """
+            ),
+            {
+                "source_account_key": UUID(source_account_key),
+                "target_account_key": UUID(target_account_key),
+            },
+        ).mappings().all()
+
+    setup_by_key = {
+        str(account["account_key"]): account for account in setup_accounts
+    }
+    source_setup = setup_by_key[source_account_key]
+    target_setup = setup_by_key[target_account_key]
 
     assert source_account_key != target_account_key
-    assert source_snapshot["client_key"] != target_snapshot["client_key"]
-    assert source_snapshot["status"] == "ACTIVE"
-    assert source_snapshot["balance_cents"] == 100_000
-    assert target_snapshot["status"] == "ACTIVE"
-    assert target_snapshot["balance_cents"] == 0
+    assert source_setup["client_id"] != target_setup["client_id"]
+    assert source_setup["client_type"] == "INDIVIDUAL"
+    assert source_setup["status"] == "ACTIVE"
+    assert source_setup["balance_cents"] == 100_000
+    assert target_setup["status"] == "ACTIVE"
+    assert target_setup["balance_cents"] == 0
 
     idempotency_key = uuid4()
     response = ClientRequisition.send(

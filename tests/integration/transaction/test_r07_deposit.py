@@ -13,25 +13,10 @@ from tests.integration.transaction.support import (
     list_statement_via_api,
     open_funded_account_via_api,
     send_deposit as _send_deposit,
+    set_account_status as _set_account_status,
 )
 from tests.utils import INTERNAL_TOKEN
 from tests.utils.requisition import ClientRequisition
-
-
-def _patch_account_status(account_key: str, status: str) -> None:
-    response = ClientRequisition.send(
-        "PATCH",
-        f"/account/{account_key}",
-        headers={"INTERNAL-TOKEN": INTERNAL_TOKEN},
-        payload={
-            "status": status,
-            "reason": "Preparação do cenário de teste da R07",
-        },
-    )
-    assert response.response_status == 200, (
-        f"R06 PATCH failed: {response.response_status} "
-        f"{response.response_content!r}"
-    )
 
 
 def test_deposit_returns_created_transaction(
@@ -163,6 +148,7 @@ def test_deposit_replays_original_transaction_for_same_idempotency_key(
 
 
 def test_deposit_replay_ignores_current_inactive_account_status(
+    api_database_engine: Engine,
 ) -> None:
     active_account_key = open_funded_account_via_api()
     idempotency_key = uuid4()
@@ -173,7 +159,13 @@ def test_deposit_replay_ignores_current_inactive_account_status(
     updated_at_after_original = get_account_via_api(
         active_account_key
     )["updated_at"]
-    _patch_account_status(active_account_key, "INACTIVE")
+    # A pré-condição INACTIVE é arranjada por SQL (set_account_status atualiza
+    # apenas status_id) para ISOLAR o invariante sob teste: "um replay não
+    # move account.updated_at". A R06 PATCH teria um efeito colateral
+    # observável em updated_at (account.updated_at = changed_at), fora do
+    # escopo deste teste de idempotência, e quebraria a comparação
+    # updated_at_after_replay == updated_at_after_original.
+    _set_account_status(api_database_engine, active_account_key, "INACTIVE")
 
     replay_response = _send_deposit(active_account_key, idempotency_key)
     account_after_replay = get_account_via_api(active_account_key)
