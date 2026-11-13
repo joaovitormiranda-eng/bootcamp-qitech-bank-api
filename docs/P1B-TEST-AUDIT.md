@@ -210,7 +210,7 @@ tests/unit/test_transaction_hash.py
 
 Os 5 são todos LEGITIMATE-INTERNAL (seção 5). P1-B **não** adicionou nenhum teste novo que importe `src/`. A contagem é idêntica no commit base `3166b72` (verificado com `git grep` no commit base).
 
-### COD-14 — arquivos de teste com acesso a banco (antes 45 → depois 41)
+### COD-14 — arquivos de teste com acesso a banco (antes 45 → depois 43)
 
 ```
 $ grep -rlnE "sqlalchemy|text\(|exec_driver_sql|create_engine|api_database_engine|app_db_engine" \
