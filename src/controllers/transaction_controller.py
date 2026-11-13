@@ -180,20 +180,20 @@ class TransactionController(BaseController):
 
             try:
                 if transaction_type == FinancialTransaction.DEPOSIT:
-                    return self._create_deposit(
+                    result = self._create_deposit(
                         account_key=parsed_account_key,
                         idempotency_key=parsed_idempotency_key,
                         request_hash=request_hash,
                         amount_cents=amount_cents,
                     )
-
-                return self._create_transfer(
-                    source_account_key=parsed_account_key,
-                    target_account_key=parsed_target_account_key,
-                    idempotency_key=parsed_idempotency_key,
-                    request_hash=request_hash,
-                    amount_cents=amount_cents,
-                )
+                else:
+                    result = self._create_transfer(
+                        source_account_key=parsed_account_key,
+                        target_account_key=parsed_target_account_key,
+                        idempotency_key=parsed_idempotency_key,
+                        request_hash=request_hash,
+                        amount_cents=amount_cents,
+                    )
             except IntegrityError as error:
                 if not self._is_idempotency_key_collision(error):
                     raise
@@ -206,6 +206,20 @@ class TransactionController(BaseController):
                 if winner_response is None:
                     raise
                 return winner_response
+
+            # Replay short-circuit: the private flow already rolled back the
+            # lock-select transaction and produced the idempotent response, so
+            # there is no new work to persist and nothing to commit.
+            if not isinstance(result, UUID):
+                return result
+
+            # A brand-new transaction was staged (entries + balances flushed but
+            # not committed). Commit here so the transaction boundary is visible
+            # at the public controller method, then build the 201 response from a
+            # post-commit re-read (commit expires the ORM attributes).
+            transaction_key = result
+            self.session.commit()
+            return self._build_response(transaction_key)
         except Exception:
             self.session.rollback()
             raise
@@ -216,7 +230,7 @@ class TransactionController(BaseController):
         idempotency_key: UUID,
         request_hash: str,
         amount_cents: int,
-    ) -> dict:
+    ) -> UUID | dict:
         account = self.account_repository.get_by_key_for_update(account_key)
         if account is None:
             raise AccountNotFound(str(account_key))
@@ -259,7 +273,7 @@ class TransactionController(BaseController):
             updated_at=transaction_created_at,
         )
 
-        return self._commit_and_build_response(transaction_key)
+        return transaction_key
 
     def _create_transfer(
         self,
@@ -268,7 +282,7 @@ class TransactionController(BaseController):
         idempotency_key: UUID,
         request_hash: str,
         amount_cents: int,
-    ) -> dict:
+    ) -> UUID | dict:
         account_ids_by_key = self.account_repository.get_ids_by_keys(
             (source_account_key, target_account_key)
         )
@@ -365,10 +379,9 @@ class TransactionController(BaseController):
             updated_at=transaction_created_at,
         )
 
-        return self._commit_and_build_response(transaction_key)
+        return transaction_key
 
-    def _commit_and_build_response(self, transaction_key: UUID) -> dict:
-        self.session.commit()
+    def _build_response(self, transaction_key: UUID) -> dict:
         persisted_transaction = (
             self.transaction_repository.get_by_key_with_entries(
                 transaction_key
