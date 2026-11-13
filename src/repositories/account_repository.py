@@ -8,15 +8,25 @@ from models import (
     Account,
     AccountStatus,
     AccountStatusEvent,
+    ActorType,
     Client,
     ClientStatus,
     ClientStatusEvent,
+    ClientType,
 )
 
 
 class AccountRepository:
     def __init__(self, context: Context) -> None:
         self.session = context.db_session
+
+    def _actor_type_id(self, enumerator: str) -> int:
+        """Resolve o texto do ator para o id da lookup."""
+        return (
+            self.session.query(ActorType.id)
+            .filter(ActorType.enumerator == enumerator)
+            .scalar()
+        )
 
     def get_client_by_key_for_update(self, client_key: UUID) -> Client | None:
         return (
@@ -99,7 +109,8 @@ class AccountRepository:
 
     def get_client_type(self, client_id: int) -> str | None:
         return (
-            self.session.query(Client.client_type)
+            self.session.query(ClientType.enumerator)
+            .join(Client, Client.client_type_id == ClientType.id)
             .filter(Client.id == client_id)
             .scalar()
         )
@@ -181,7 +192,7 @@ class AccountRepository:
                 account_id=account_id,
                 from_status_id=from_status_id,
                 to_status_id=to_status_id,
-                actor_type=AccountStatusEvent.INTERNAL,
+                actor_type_id=self._actor_type_id(AccountStatusEvent.INTERNAL),
                 reason=reason,
                 created_at=created_at,
             )
@@ -200,7 +211,7 @@ class AccountRepository:
                 client_id=client_id,
                 from_status_id=from_status_id,
                 to_status_id=to_status_id,
-                actor_type=ClientStatusEvent.INTERNAL,
+                actor_type_id=self._actor_type_id(ClientStatusEvent.INTERNAL),
                 reason=reason,
                 created_at=created_at,
             )
@@ -229,7 +240,7 @@ class AccountRepository:
             account_id=account_id,
             from_status_id=None,
             to_status_id=status.id,
-            actor_type=AccountStatusEvent.SYSTEM,
+            actor_type_id=self._actor_type_id(AccountStatusEvent.SYSTEM),
             reason=None,
             created_at=datetime.now(timezone.utc),
         )

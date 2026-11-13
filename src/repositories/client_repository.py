@@ -6,9 +6,11 @@ from sqlalchemy.orm import lazyload
 from database import Context
 from models import (
     Account,
+    ActorType,
     Client,
     ClientStatus,
     ClientStatusEvent,
+    ClientType,
     CompanyClient,
     IndividualClient,
 )
@@ -17,6 +19,22 @@ from models import (
 class ClientRepository:
     def __init__(self, context: Context) -> None:
         self.session = context.db_session
+
+    def _client_type_id(self, enumerator: str) -> int:
+        """Resolve o texto do tipo de cliente para o id da lookup."""
+        return (
+            self.session.query(ClientType.id)
+            .filter(ClientType.enumerator == enumerator)
+            .scalar()
+        )
+
+    def _actor_type_id(self, enumerator: str) -> int:
+        """Resolve o texto do ator para o id da lookup."""
+        return (
+            self.session.query(ActorType.id)
+            .filter(ActorType.enumerator == enumerator)
+            .scalar()
+        )
 
     def get_status(self, enumerator: str) -> ClientStatus:
         return (
@@ -86,7 +104,7 @@ class ClientRepository:
             client_id=client.id,
             from_status_id=from_status.id,
             to_status_id=to_status.id,
-            actor_type=ClientStatusEvent.INTERNAL,
+            actor_type_id=self._actor_type_id(ClientStatusEvent.INTERNAL),
             reason=reason,
             created_at=changed_at,
         )
@@ -120,7 +138,7 @@ class ClientRepository:
 
         client = Client()
         client.client_key = uuid4()
-        client.client_type = client_type
+        client.client_type_id = self._client_type_id(client_type)
         client.email = email
         client.timezone = timezone_name
         client.status_id = status.id
@@ -179,7 +197,7 @@ class ClientRepository:
         status_event.client_id = client.id
         status_event.from_status_id = None
         status_event.to_status_id = to_status.id
-        status_event.actor_type = actor_type
+        status_event.actor_type_id = self._actor_type_id(actor_type)
         status_event.reason = None
         status_event.created_at = datetime.now(timezone.utc)
 
