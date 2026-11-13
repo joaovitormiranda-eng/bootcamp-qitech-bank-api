@@ -101,9 +101,9 @@ Todos os arquivos sob `tests/` que contêm `def test_` (63 arquivos):
 | integration/transaction/test_r07_financial_concurrency.py | 2 | não | não | sim | DB-ACCESS / LEGITIMATE-INTERNAL | Concorrência financeira (locks). |
 | integration/transaction/test_r07_idempotency_concurrency.py | 2 | não | não | sim | DB-ACCESS / LEGITIMATE-INTERNAL | Concorrência de idempotência (locks). |
 | integration/transaction/test_r07_transfer_errors.py | 12 | não | não | sim | DB-ACCESS (parcial) | 7/12 black-box; SQL mantido p/ overflow/INACTIVE/CLOSED/conta None. |
-| integration/transaction/test_r07_transfer_fee.py | 2 | sim | não | não | BLACK-BOX | **Convertido (FEAT-003):** taxa/saldo/entradas via R07/R08/R05. |
-| integration/transaction/test_r07_transfer_idempotency.py | 3 | sim | não | não | BLACK-BOX | **Convertido (FEAT-003):** replay/conflito via R05+R08. |
-| integration/transaction/test_r07_transfer.py | 1 | não | não | sim | DB-ACCESS (parcial) | Prep via API; SQL só p/ `request_hash` SHA-256 do TRANSFER. |
+| integration/transaction/test_r07_transfer_fee.py | 2 | não | não | sim | DB-ACCESS (parcial) | **Convertido (FEAT-003), ajustado no fix `08dbec1`:** verificação via R07/R08/R05; SQL só p/ semear saldo inicial da origem (abertura sem lançamento visível, sem projeção HTTP). |
+| integration/transaction/test_r07_transfer_idempotency.py | 3 | não | não | sim | DB-ACCESS (parcial) | **Convertido (FEAT-003), ajustado no fix `08dbec1`:** replay/conflito via R05+R08; SQL só p/ semear saldo inicial da origem. |
+| integration/transaction/test_r07_transfer.py | 1 | não | não | sim | DB-ACCESS (parcial) | Prep via API; SQL p/ `request_hash` SHA-256 do TRANSFER + sanity de setup (`client_type`/`client_id` sem projeção HTTP) + semear saldo da origem. |
 | integration/transaction/test_r07_validation.py | 4 | sim | não | não | BLACK-BOX | Validação do R07 via HTTP (já black-box antes de P1-B). |
 | integration/transaction/test_r08_statement_basic.py | 6 | sim | não | não | BLACK-BOX | **Convertido (FEAT-003):** INACTIVE/CLOSED via R06; verify via R08. |
 | integration/transaction/test_r08_statement_dates.py | 8 | não | não | sim | DB-ACCESS (parcial) | SQL p/ timezone do cliente e `created_at` back-dated (persistência/timezone). |
@@ -126,21 +126,23 @@ Contagem de arquivos (`def test_`) por classificação, medida com `grep` no com
 | Métrica (arquivos) | Antes (`3166b72`) | Depois (branch) | Delta | Origem da delta |
 |--------------------|-------------------|-----------------|-------|-----------------|
 | Total de arquivos com `def test_` | 62 | 63 | +1 | FEAT-002 (novo módulo COD-13) |
-| Black-box (HTTP-only: nem `src` nem DB) | 15 | 20 | +5 | +1 FEAT-002, +4 FEAT-003 |
+| Black-box (HTTP-only: nem `src` nem DB) | 15 | 18 | +3 | +1 FEAT-002, +2 FEAT-003 |
 | Importam `src/` | 5 | 5 | 0 | — (nenhum teste novo importa `src/`) |
-| Acessam banco (SQLAlchemy/engine/helper-SQL) | 45 | 41 | −4 | FEAT-003 (conversão R07/R08) |
+| Acessam banco (SQLAlchemy/engine/helper-SQL) | 45 | 43 | −2 | FEAT-003 (conversão R08) |
 
-Os **4 arquivos que deixaram de acessar o banco** (DB-ACCESS → BLACK-BOX) por FEAT-003:
-`test_r07_transfer_fee.py`, `test_r07_transfer_idempotency.py`, `test_r08_statement_basic.py`, `test_r08_statement_validation.py`.
+Os **2 arquivos que deixaram de acessar o banco** (DB-ACCESS → BLACK-BOX) por FEAT-003:
+`test_r08_statement_basic.py`, `test_r08_statement_validation.py`.
+
+> **Nota de reconciliação (fix `08dbec1`):** a revisão semântica (v1) apontou que a conversão inicial de `test_r07_transfer_fee.py`, `test_r07_transfer_idempotency.py` e `test_r08_statement_{entries,ordering,pagination}.py` quebrava asserções de forma determinística, porque o helper `open_funded_account_via_api(balance_cents>0)` financia a conta com um DEPOSIT **visível** no extrato, enquanto o antigo `create_account` definia o saldo de abertura **sem** lançamento. O fix reverteu **apenas a semeadura do saldo de abertura da conta de origem** para SQL (fixture legítima de forma de extrato, inatingível pela API pública sem um lançamento visível), mantendo targets preparados via API e todas as asserções intactas. Em consequência, `test_r07_transfer_fee.py` e `test_r07_transfer_idempotency.py` voltaram a ser DB-ACCESS (parcial) a nível de arquivo. O ganho líquido black-box a nível de arquivo é **+3** (não +5): o módulo COD-13 novo mais os dois arquivos de statement acima. O restante da conversão COD-04/COD-14 permanece como redução do SQL ao mínimo justificado dentro de cada arquivo.
 
 Mapeamento para os critérios da banca (leitura a nível de arquivo; **as porcentagens exatas por teste coletado são CI-autoritativas**):
 
 | Critério | Antes (banca v2.13) | Movimento em P1-B | Evidência |
 |----------|---------------------|-------------------|-----------|
-| **COD-04** (black-box) | 197/272 | **+5 arquivos** passaram a dirigir a API só via HTTP (15→20 arquivos black-box). As conversões preservam toda asserção (taxa PF 0,50% min50 max1000 / PJ 1,00% min100 max1500 / HALF_UP; replay idempotente; validação de statement). | §3, §4, FEAT-003 |
+| **COD-04** (black-box) | 197/272 | **+3 arquivos** passaram a dirigir a API só via HTTP (15→18 arquivos black-box), além de redução do SQL ao mínimo justificado em vários arquivos R07/R08. As conversões preservam toda asserção (taxa PF 0,50% min50 max1000 / PJ 1,00% min100 max1500 / HALF_UP; replay idempotente; validação de statement). | §3, §4, FEAT-003 |
 | **COD-08** (sem import de `src/`) | 104/110 | **0 arquivos adicionados** importando `src/`; permanece exatamente 5 arquivos, todos legítimos (seção 5). | §7 grep COD-08 |
 | **COD-13** (MockServer real) | **0/1** | **0/1 → 1/1**: novo `test_provider_call_recording.py` com 3 testes que gravam a chamada real `POST /v1/client-analysis`. | §6, FEAT-002 |
-| **COD-14** (sem banco fora de rollback) | 67/109 | **−4 arquivos** deixaram de acessar o banco (45→41 arquivos com DB); vários outros tiveram o SQL reduzido ao mínimo (parciais na seção 6). | §4, §6, FEAT-003 |
+| **COD-14** (sem banco fora de rollback) | 67/109 | **−2 arquivos** deixaram de acessar o banco (45→43 arquivos com DB); vários outros tiveram o SQL reduzido ao mínimo (parciais na seção 6). | §4, §6, FEAT-003 |
 
 > As deltas acima são **a nível de arquivo** e determinísticas. A tradução para a fração exata de *testes coletados* que a banca pontua depende de rodar a stack viva; por Docker estar indisponível no sandbox, **o run verde autoritativo é o GitHub Actions CI**. Não reivindicamos conformidade total.
 
@@ -213,19 +215,17 @@ Os 5 são todos LEGITIMATE-INTERNAL (seção 5). P1-B **não** adicionou nenhum 
 ```
 $ grep -rlnE "sqlalchemy|text\(|exec_driver_sql|create_engine|api_database_engine|app_db_engine" \
     $(grep -rln "def test_" tests --include=*.py) | sort | wc -l
-41
+43
 ```
 
 Diferença contra o commit base `3166b72` (arquivos que deixaram de acessar o banco):
 
 ```
-tests/integration/transaction/test_r07_transfer_fee.py
-tests/integration/transaction/test_r07_transfer_idempotency.py
 tests/integration/transaction/test_r08_statement_basic.py
 tests/integration/transaction/test_r08_statement_validation.py
 ```
 
-Conjunto black-box (nem `src` nem banco) subiu de **15** (base) para **20** (branch): os 4 acima + o módulo novo de COD-13.
+Conjunto black-box (nem `src` nem banco) subiu de **15** (base) para **18** (branch): os 2 acima + o módulo novo de COD-13. `test_r07_transfer_fee.py` e `test_r07_transfer_idempotency.py` foram inicialmente convertidos a black-box, mas o fix `08dbec1` (pós-revisão v1) reverteu a semeadura do saldo de abertura da origem para SQL, pois o financiamento por API deixa um lançamento visível no extrato que quebrava asserções de forma determinística; permanecem DB-ACCESS (parcial) a nível de arquivo, com asserções preservadas.
 
 ### COD-13 — chamada real ao provedor comprovada via MockServer (0/1 → 1/1)
 
@@ -270,6 +270,7 @@ Docker está quebrado neste sandbox (`could not find a working conmon binary`), 
 | `b7753b4` | `tests/integration/client/r03/test_provider_call_recording.py` | **adicionado** — 3 testes COD-13 (MockServer real). |
 | `eebb21a` | `tests/integration/transaction/support.py` + testes R07/R08 | **modificado** — helpers API-only; conversão fee/deposit/transfer/idempotency/statement (COD-04/14). |
 | `7e32789` | `test_r08_statement_validation.py`, `test_r07_deposit_errors.py`, `test_r07_transfer_errors.py` | **modificado** — conversão de validação de statement e caminhos de erro R07 (COD-04/14). |
-| (este) | `docs/P1B-TEST-AUDIT.md` | **adicionado** — esta auditoria. |
+| `08dbec1` | `test_r07_transfer_fee.py`, `test_r07_transfer_idempotency.py`, `test_r07_transfer.py`, `test_r07_deposit.py`, `test_r08_statement_{entries,ordering,pagination}.py` | **modificado** — fix pós-revisão v1: reverte semeadura de saldo de abertura da origem para SQL e restaura invariantes `updated_at`/`client_type` sem enfraquecer asserções. |
+| (este) | `docs/P1B-TEST-AUDIT.md` | **adicionado/atualizado** — esta auditoria, reconciliada com o fix `08dbec1`. |
 
 Nenhum teste removido. Sem mudança em `src/`, `database/database.sql`, tabelas/enums/chaves, CI (`.github/workflows/ci.yml`), `tests/utils/db_utils.py` (isolamento de dois clusters e guarda de `DROP SCHEMA` só em `*_test` intactos). Semântica RFC v2.1 (taxas PF/PJ, idempotência+SHA-256, locks/concorrência, COMMIT/rollback/saldo não-negativo, estados/eventos, extratos/timezone, contrato R03) preservada.
