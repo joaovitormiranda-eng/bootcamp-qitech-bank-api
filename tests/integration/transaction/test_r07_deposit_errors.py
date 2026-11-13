@@ -5,6 +5,9 @@ from sqlalchemy.engine import Engine
 
 from tests.integration.transaction.support import (
     create_account,
+    get_account_via_api,
+    list_statement_via_api,
+    open_funded_account_via_api,
     read_deposit_state,
     read_request_state,
     send_deposit,
@@ -17,57 +20,45 @@ BIGINT_MAX = 9_223_372_036_854_775_807
 
 @pytest.mark.parametrize("invalid_amount", [0, -1])
 def test_deposit_rejects_amount_below_minimum(
-    active_account_key: str,
-    api_database_engine: Engine,
     invalid_amount: int,
 ) -> None:
+    account_key = open_funded_account_via_api()
     idempotency_key = uuid4()
 
     response = send_deposit(
-        active_account_key,
+        account_key,
         idempotency_key,
         invalid_amount,
     )
-    state = read_deposit_state(
-        api_database_engine,
-        active_account_key,
-        idempotency_key,
-    )
 
     assert response.response_status == 422
     assert response.response_json["code"] == "TRX0004"
-    assert state["balance_cents"] == 0
-    assert state["transactions"] == []
-    assert state["entries"] == []
+    assert get_account_via_api(account_key)["balance_cents"] == 0
+    assert list_statement_via_api(account_key)["data"] == []
 
 
-def test_deposit_rejects_amount_above_bigint(
-    active_account_key: str,
-    api_database_engine: Engine,
-) -> None:
+def test_deposit_rejects_amount_above_bigint() -> None:
+    account_key = open_funded_account_via_api()
     idempotency_key = uuid4()
 
     response = send_deposit(
-        active_account_key,
+        account_key,
         idempotency_key,
         BIGINT_MAX + 1,
-    )
-    state = read_deposit_state(
-        api_database_engine,
-        active_account_key,
-        idempotency_key,
     )
 
     assert response.response_status == 422
     assert response.response_json["code"] == "TRX0004"
-    assert state["balance_cents"] == 0
-    assert state["transactions"] == []
-    assert state["entries"] == []
+    assert get_account_via_api(account_key)["balance_cents"] == 0
+    assert list_statement_via_api(account_key)["data"] == []
 
 
 def test_deposit_rejects_balance_overflow(
     api_database_engine: Engine,
 ) -> None:
+    # A starting balance of BIGINT_MAX-10 is unreachable through API deposits
+    # (the overflow guard rejects any deposit that would reach it), so the
+    # near-overflow pre-state and its persistence check stay on SQL.
     initial_balance = BIGINT_MAX - 10
     account_key = create_account(
         api_database_engine,
@@ -92,6 +83,9 @@ def test_deposit_rejects_balance_overflow(
 def test_deposit_returns_account_not_found_without_persisting(
     api_database_engine: Engine,
 ) -> None:
+    # The account intentionally does not exist, so there is no R05/R08
+    # projection to assert against; the "nothing persisted" guarantee keeps
+    # the read-only request-state SQL probe.
     missing_account_key = str(uuid4())
     idempotency_key = uuid4()
 
@@ -109,6 +103,9 @@ def test_deposit_rejects_new_operation_for_non_active_account(
     api_database_engine: Engine,
     account_status: str,
 ) -> None:
+    # An INACTIVE/CLOSED account cannot be arranged as a starting state
+    # through the public API (R04 always opens an ACTIVE account), so the
+    # pre-state and persistence check stay on SQL.
     account_key = create_account(
         api_database_engine,
         status=account_status,
@@ -133,6 +130,9 @@ def test_deposit_rejects_new_operation_for_non_active_account(
 def test_failed_deposit_does_not_consume_idempotency_key(
     api_database_engine: Engine,
 ) -> None:
+    # Requires an INACTIVE starting state that is later flipped to ACTIVE;
+    # neither the INACTIVE pre-state nor the in-place status change is
+    # reachable through the public API, so SQL setup/verification stays.
     account_key = create_account(api_database_engine, status="INACTIVE")
     idempotency_key = uuid4()
 

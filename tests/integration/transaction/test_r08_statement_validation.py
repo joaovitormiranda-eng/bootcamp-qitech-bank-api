@@ -1,17 +1,15 @@
 import pytest
-from sqlalchemy.engine import Engine
 
-from tests.integration.transaction.support import create_account
+from tests.integration.transaction.support import open_funded_account_via_api
 from tests.utils import INTERNAL_TOKEN
 from tests.utils.requisition import ClientRequisition
 
 
 @pytest.mark.parametrize("page", ["0", "-1", "abc", ""])
 def test_statement_rejects_invalid_page(
-    api_database_engine: Engine,
     page: str,
 ) -> None:
-    account_key = create_account(api_database_engine)
+    account_key = open_funded_account_via_api()
 
     response = ClientRequisition.send(
         "GET",
@@ -26,10 +24,9 @@ def test_statement_rejects_invalid_page(
 
 @pytest.mark.parametrize("limit", ["0", "-1", "101", "abc", ""])
 def test_statement_rejects_invalid_limit(
-    api_database_engine: Engine,
     limit: str,
 ) -> None:
-    account_key = create_account(api_database_engine)
+    account_key = open_funded_account_via_api()
 
     response = ClientRequisition.send(
         "GET",
@@ -44,10 +41,9 @@ def test_statement_rejects_invalid_limit(
 
 @pytest.mark.parametrize("order_by", ["ASC", "DESC", "foo", ""])
 def test_statement_rejects_invalid_order_by(
-    api_database_engine: Engine,
     order_by: str,
 ) -> None:
-    account_key = create_account(api_database_engine)
+    account_key = open_funded_account_via_api()
 
     response = ClientRequisition.send(
         "GET",
@@ -60,10 +56,8 @@ def test_statement_rejects_invalid_order_by(
     assert response.response_json["code"] == "QIT000001"
 
 
-def test_statement_rejects_unknown_query_param(
-    api_database_engine: Engine,
-) -> None:
-    account_key = create_account(api_database_engine)
+def test_statement_rejects_unknown_query_param() -> None:
+    account_key = open_funded_account_via_api()
 
     response = ClientRequisition.send(
         "GET",
@@ -87,12 +81,11 @@ def test_statement_rejects_unknown_query_param(
     ],
 )
 def test_statement_rejects_repeated_scalar_query_param(
-    api_database_engine: Engine,
     param_name: str,
     first_value: str,
     second_value: str,
 ) -> None:
-    account_key = create_account(api_database_engine)
+    account_key = open_funded_account_via_api()
     endpoint = (
         f"/account/{account_key}/transactions"
         f"?{param_name}={first_value}&{param_name}={second_value}"
@@ -113,10 +106,9 @@ def test_statement_rejects_repeated_scalar_query_param(
     ["page", "limit", "order_by", "date_from", "date_to"],
 )
 def test_statement_rejects_blank_query_param(
-    api_database_engine: Engine,
     param_name: str,
 ) -> None:
-    account_key = create_account(api_database_engine)
+    account_key = open_funded_account_via_api()
 
     response = ClientRequisition.send(
         "GET",
@@ -132,11 +124,10 @@ def test_statement_rejects_blank_query_param(
 @pytest.mark.parametrize("date_param", ["date_from", "date_to"])
 @pytest.mark.parametrize("invalid_date", ["01/10/2026", "2026-2-1", "abc"])
 def test_statement_rejects_malformed_date_format(
-    api_database_engine: Engine,
     date_param: str,
     invalid_date: str,
 ) -> None:
-    account_key = create_account(api_database_engine)
+    account_key = open_funded_account_via_api()
 
     response = ClientRequisition.send(
         "GET",
@@ -159,10 +150,9 @@ def test_statement_rejects_malformed_date_format(
     ],
 )
 def test_statement_accepts_valid_query_params_for_empty_account(
-    api_database_engine: Engine,
     query_params: dict[str, str],
 ) -> None:
-    account_key = create_account(api_database_engine)
+    account_key = open_funded_account_via_api()
 
     response = ClientRequisition.send(
         "GET",
