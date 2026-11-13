@@ -49,3 +49,17 @@ class MockServer:
             timeout=MOCKSERVER_CONTROL_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
+
+    @staticmethod
+    def retrieve_recorded_requests(http_request: dict) -> list:
+        response = requests.put(
+            f"{MOCKSERVER_URL}/mockserver/retrieve",
+            params={
+                "type": "REQUESTS",
+                "format": "JSON",
+            },
+            json=http_request,
+            timeout=MOCKSERVER_CONTROL_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        return response.json()
