@@ -1,0 +1,174 @@
+name: CI - full test suite
+
+# Executa a suíte REAL (442 testes: unit + integração HTTP + schema) contra
+# uma stack completa provisionada pelo próprio runner: PostgreSQL, MockServer
+# e a API viva (uvicorn). O Docker está quebrado na sandbox de desenvolvimento,
+# então este workflow é a forma sancionada de obter evidência verde real.
+
+on:
+  push:
+    branches:
+      - main
+      - fix/p0-test-suite-reproducibility
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # Topologia de serviços:
+    #   - postgres: um único servidor PostgreSQL 16 (igual ao database/Dockerfile).
+    #     Cria automaticamente apenas o banco bootcamp (POSTGRES_DB). O segundo
+    #     banco (bootcamp_test) é criado em um passo via psql.
+    #   - mockserver: o provedor cadastral simulado (igual ao mockserver/Dockerfile,
+    #     imagem 8.0.0). Os testes da R03 configuram expectativas em tempo de
+    #     execução pela API de controle (MockServer.reset()/expect), portanto o
+    #     JSON de seed NÃO é necessário para a instância de teste.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: bootcamp
+          POSTGRES_PASSWORD: bootcamp
+          POSTGRES_DB: bootcamp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bootcamp -d bootcamp"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+      mockserver:
+        image: mockserver/mockserver:8.0.0
+        ports:
+          - 1080:1080
+
+    env:
+      # Mapeamento de ambiente — deve bater EXATAMENTE com o que
+      # tests/conftest.py espera. O conftest usa os.environ.setdefault,
+      # então estas variáveis exportadas no job têm precedência.
+      #
+      # Banco da API (bootcamp) e banco de schema descartável (bootcamp_test)
+      # vivem no MESMO servidor PostgreSQL; as asserções dos conftests comparam
+      # o nome/URL do banco (não o host), então isto é seguro e correto.
+      DATABASE_URL: postgresql+psycopg2://bootcamp:bootcamp@127.0.0.1:5432/bootcamp
+      TEST_DATABASE_URL: postgresql+psycopg2://bootcamp:bootcamp@127.0.0.1:5432/bootcamp_test
+      INTERNAL_TOKEN: default_token
+      ANALYSIS_PROVIDER_URL: http://127.0.0.1:1080
+      MOCKSERVER_URL: http://127.0.0.1:1080
+      ANALYSIS_PROVIDER_TIMEOUT: "5"
+      SERVER_LOCALHOST: 127.0.0.1
+      API_PORT: "3001"
+      APP_ENV: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Wait for PostgreSQL
+        run: |
+          for i in $(seq 1 30); do
+            if pg_isready -h 127.0.0.1 -p 5432 -U bootcamp >/dev/null 2>&1; then
+              echo "PostgreSQL pronto."
+              exit 0
+            fi
+            echo "Aguardando PostgreSQL... ($i)"
+            sleep 2
+          done
+          echo "PostgreSQL não ficou pronto a tempo." >&2
+          exit 1
+
+      - name: Create bootcamp_test database and load schema
+        env:
+          PGPASSWORD: bootcamp
+        run: |
+          # O servidor cria apenas o banco bootcamp (POSTGRES_DB). O banco de
+          # schema descartável precisa existir vazio: a fixture de sessão em
+          # tests/integration/database/conftest.py chama DbUtils.reset_schema,
+          # que executa DROP SCHEMA public CASCADE e reaplica database.sql.
+          # Isso é SEGURO apenas porque bootcamp_test é efêmero e termina em _test.
+          psql "postgresql://bootcamp:bootcamp@127.0.0.1:5432/postgres" \
+            -v ON_ERROR_STOP=1 -c "CREATE DATABASE bootcamp_test;"
+          # Carrega o schema (ERD) no banco da API.
+          psql "postgresql://bootcamp:bootcamp@127.0.0.1:5432/bootcamp" \
+            -v ON_ERROR_STOP=1 -f database/database.sql
+
+      - name: Wait for MockServer
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" \
+              -X PUT http://127.0.0.1:1080/mockserver/status || true)
+            # O MockServer responde 200 em /mockserver/status quando está de pé.
+            if [ "$code" = "200" ]; then
+              echo "MockServer pronto."
+              exit 0
+            fi
+            echo "Aguardando MockServer... ($i) [http=$code]"
+            sleep 2
+          done
+          echo "MockServer não ficou pronto a tempo." >&2
+          exit 1
+
+      - name: Start API (uvicorn)
+        run: |
+          # src/database.py cria a engine na importação, então DATABASE_URL já
+          # precisa estar válido e o banco acessível antes do uvicorn subir.
+          # WORKDIR da imagem é /app = src/, então rodamos a partir de src/.
+          cd src
+          nohup python -m uvicorn app:app \
+            --host 127.0.0.1 --port 3001 --no-access-log \
+            > "$GITHUB_WORKSPACE/api.log" 2>&1 &
+          echo "API iniciada em background (pid $!)."
+
+      - name: Wait for API /health_check (204)
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" \
+              http://127.0.0.1:3001/health_check || true)
+            if [ "$code" = "204" ]; then
+              echo "API pronta (/health_check -> 204)."
+              exit 0
+            fi
+            echo "Aguardando API... ($i) [http=$code]"
+            sleep 2
+          done
+          echo "A API não respondeu 204 em /health_check a tempo." >&2
+          echo "===== api.log =====" >&2
+          cat "$GITHUB_WORKSPACE/api.log" >&2 || true
+          exit 1
+
+      - name: Run full pytest suite
+        run: |
+          # Passo que decide pass/fail do job. Sem continue-on-error,
+          # sem --maxfail, sem skip/xfail artificiais.
+          python -m pytest -q -ra --junitxml=pytest-results.xml
+
+      - name: Dump API logs on failure
+        if: failure()
+        run: |
+          echo "===== api.log =====" 
+          cat "$GITHUB_WORKSPACE/api.log" || true
+
+      - name: Upload pytest results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-results
+          path: |
+            pytest-results.xml
+            api.log
+          if-no-files-found: ignore
