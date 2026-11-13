@@ -202,3 +202,211 @@ jobs:
             pytest-results.xml
             api.log
           if-no-files-found: ignore
+
+  # Job ISOLADO de validação da migração de schema POPULADO (P1-D/COD-05/COD-06).
+  # NÃO substitui nem altera o job `test` (obrigatório para a main protegida):
+  # roda em paralelo, com seu PRÓPRIO cluster PostgreSQL efêmero e dedicado,
+  # e aplica a migração versionada via `psql -f` sobre o schema LEGADO populado,
+  # comparando os dados antes/depois. Prova que a evolução de um banco já
+  # povoado preserva contagem, identidade, valores e relacionamentos.
+  migration:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres_migration:
+        image: postgres:16
+        env:
+          POSTGRES_USER: bootcamp
+          POSTGRES_PASSWORD: bootcamp
+          POSTGRES_DB: bootcamp_migration_test
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd "pg_isready -U bootcamp -d bootcamp_migration_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGPASSWORD: bootcamp
+      MIG_URL: postgresql://bootcamp:bootcamp@127.0.0.1:5434/bootcamp_migration_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Wait for PostgreSQL
+        run: |
+          for i in $(seq 1 30); do
+            if pg_isready -h 127.0.0.1 -p 5434 -U bootcamp >/dev/null 2>&1; then
+              echo "PostgreSQL de migração pronto."; break
+            fi
+            echo "Aguardando PostgreSQL de migração... ($i)"; sleep 2
+          done
+
+      - name: Install legacy (pre-P1-D) schema
+        run: |
+          # Schema LEGADO: enums como VARCHAR+CHECK e transaction_entry sem entry_key.
+          psql "$MIG_URL" -v ON_ERROR_STOP=1 \
+            -f tests/integration/database/legacy_schema.sql
+
+      - name: Seed representative data (PF/PJ, contas, saldos, históricos, transações)
+        run: |
+          psql "$MIG_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          -- Cliente PF ACTIVE + perfil + eventos
+          WITH c AS (
+            INSERT INTO client (client_key, client_type, email, timezone, status_id, created_at, updated_at)
+            VALUES (gen_random_uuid(), 'INDIVIDUAL', 'pf@example.test', 'America/Sao_Paulo',
+                    (SELECT id FROM client_status WHERE enumerator='ACTIVE'), NOW(), NOW())
+            RETURNING id
+          )
+          INSERT INTO individual_client (client_id, cpf, full_name, birth_date)
+          SELECT id, '52998224725', 'Pessoa Fisica', '1990-01-01' FROM c;
+
+          INSERT INTO client_status_event (client_id, from_status_id, to_status_id, actor_type, reason, created_at)
+          SELECT c.id, NULL, (SELECT id FROM client_status WHERE enumerator='PENDING'), 'SYSTEM', NULL, NOW()
+          FROM client c WHERE c.email='pf@example.test';
+
+          -- Cliente PJ ACTIVE + perfil
+          WITH c AS (
+            INSERT INTO client (client_key, client_type, email, timezone, status_id, created_at, updated_at)
+            VALUES (gen_random_uuid(), 'COMPANY', 'pj@example.test', 'America/Sao_Paulo',
+                    (SELECT id FROM client_status WHERE enumerator='ACTIVE'), NOW(), NOW())
+            RETURNING id
+          )
+          INSERT INTO company_client (client_id, cnpj, legal_name, trade_name)
+          SELECT id, '11222333000181', 'Empresa Teste Ltda', NULL FROM c;
+
+          -- Contas (PF e PJ)
+          INSERT INTO account (account_key, client_id, status_id, balance_cents, created_at, updated_at)
+          SELECT gen_random_uuid(), c.id, (SELECT id FROM account_status WHERE enumerator='ACTIVE'),
+                 59800, NOW(), NOW()
+          FROM client c WHERE c.email='pf@example.test';
+          INSERT INTO account (account_key, client_id, status_id, balance_cents, created_at, updated_at)
+          SELECT gen_random_uuid(), c.id, (SELECT id FROM account_status WHERE enumerator='ACTIVE'),
+                 540000, NOW(), NOW()
+          FROM client c WHERE c.email='pj@example.test';
+
+          INSERT INTO account_status_event (account_id, from_status_id, to_status_id, actor_type, reason, created_at)
+          SELECT a.id, NULL, (SELECT id FROM account_status WHERE enumerator='ACTIVE'), 'SYSTEM', NULL, NOW()
+          FROM account a;
+
+          -- Depósito PF
+          WITH t AS (
+            INSERT INTO financial_transaction (transaction_key, request_control_key, request_hash, transaction_type, created_at)
+            VALUES (gen_random_uuid(), gen_random_uuid(), repeat('a',64), 'DEPOSIT', NOW())
+            RETURNING id
+          )
+          INSERT INTO transaction_entry (transaction_id, account_id, direction, entry_type, amount_cents, balance_after_cents, created_at)
+          SELECT t.id, a.id, 'CREDIT', 'PRINCIPAL', 100000, 100000, NOW()
+          FROM t, account a JOIN client c ON c.id=a.client_id WHERE c.email='pf@example.test';
+
+          -- Transferência PF -> PJ (principal + tarifa na origem, crédito no destino)
+          WITH t AS (
+            INSERT INTO financial_transaction (transaction_key, request_control_key, request_hash, transaction_type, created_at)
+            VALUES (gen_random_uuid(), gen_random_uuid(), repeat('c',64), 'TRANSFER', NOW())
+            RETURNING id
+          )
+          INSERT INTO transaction_entry (transaction_id, account_id, direction, entry_type, amount_cents, balance_after_cents, created_at)
+          SELECT t.id, src.id, 'DEBIT', 'PRINCIPAL', 40000, 60000, NOW()
+          FROM t, account src JOIN client c ON c.id=src.client_id WHERE c.email='pf@example.test';
+          SQL
+
+      - name: Snapshot BEFORE
+        run: |
+          psql "$MIG_URL" -At -v ON_ERROR_STOP=1 -c "
+            SELECT 'clients='||count(*) FROM client
+            UNION ALL SELECT 'entries='||count(*) FROM transaction_entry
+            UNION ALL SELECT 'txns='||count(*) FROM financial_transaction
+            UNION ALL SELECT 'sum_balance='||COALESCE(sum(balance_cents),0) FROM account
+          " | tee before.txt
+
+      - name: Apply versioned migration (psql)
+        run: |
+          psql "$MIG_URL" -v ON_ERROR_STOP=1 \
+            -f database/migrations/0001_cod05_cod06_lookup_and_entry_key.sql
+
+      - name: Snapshot AFTER and assert integrity
+        run: |
+          psql "$MIG_URL" -At -v ON_ERROR_STOP=1 -c "
+            SELECT 'clients='||count(*) FROM client
+            UNION ALL SELECT 'entries='||count(*) FROM transaction_entry
+            UNION ALL SELECT 'txns='||count(*) FROM financial_transaction
+            UNION ALL SELECT 'sum_balance='||COALESCE(sum(balance_cents),0) FROM account
+          " | tee after.txt
+          echo "=== BEFORE ==="; cat before.txt
+          echo "=== AFTER ==="; cat after.txt
+          if ! diff -u before.txt after.txt; then
+            echo "FALHA: contagens/saldos divergiram após a migração." >&2
+            exit 1
+          fi
+          # entry_key total e único; nenhuma FK nova nula; lookups criadas.
+          psql "$MIG_URL" -At -v ON_ERROR_STOP=1 -c "
+            DO \$check\$
+            BEGIN
+              IF (SELECT count(*) FROM transaction_entry)
+                 <> (SELECT count(DISTINCT entry_key) FROM transaction_entry)
+                 OR EXISTS (SELECT 1 FROM transaction_entry WHERE entry_key IS NULL) THEN
+                RAISE EXCEPTION 'entry_key ausente/duplicado';
+              END IF;
+              IF EXISTS (SELECT 1 FROM client WHERE client_type_id IS NULL)
+                 OR EXISTS (SELECT 1 FROM financial_transaction WHERE transaction_type_id IS NULL)
+                 OR EXISTS (SELECT 1 FROM transaction_entry WHERE direction_id IS NULL OR entry_type_id IS NULL) THEN
+                RAISE EXCEPTION 'FK nova nula após migração';
+              END IF;
+              IF to_regclass('public.client_type') IS NULL
+                 OR to_regclass('public.actor_type') IS NULL THEN
+                RAISE EXCEPTION 'lookup não criada';
+              END IF;
+            END
+            \$check\$;
+          "
+          echo "Migração populada validada com sucesso."
+
+      - name: Assert migration is idempotent (re-run is a no-op)
+        run: |
+          psql "$MIG_URL" -v ON_ERROR_STOP=1 \
+            -f database/migrations/0001_cod05_cod06_lookup_and_entry_key.sql
+          psql "$MIG_URL" -At -v ON_ERROR_STOP=1 -c "
+            SELECT 'clients='||count(*) FROM client
+            UNION ALL SELECT 'entries='||count(*) FROM transaction_entry
+            UNION ALL SELECT 'txns='||count(*) FROM financial_transaction
+            UNION ALL SELECT 'sum_balance='||COALESCE(sum(balance_cents),0) FROM account
+          " | tee after2.txt
+          if ! diff -u after.txt after2.txt; then
+            echo "FALHA: reexecutar a migração alterou os dados (não idempotente)." >&2
+            exit 1
+          fi
+          # Lookups não duplicaram valores.
+          psql "$MIG_URL" -At -v ON_ERROR_STOP=1 -c "
+            DO \$idem\$
+            BEGIN
+              IF (SELECT count(*) FROM actor_type) <> (SELECT count(DISTINCT enumerator) FROM actor_type)
+                 OR (SELECT count(*) FROM client_type) <> (SELECT count(DISTINCT enumerator) FROM client_type) THEN
+                RAISE EXCEPTION 'lookup duplicou na reexecução';
+              END IF;
+            END
+            \$idem\$;
+          "
+          echo "Idempotência da migração confirmada."
+
+      - name: Validate rollback restores legacy schema
+        run: |
+          psql "$MIG_URL" -v ON_ERROR_STOP=1 \
+            -f database/migrations/0001_ROLLBACK.sql
+          psql "$MIG_URL" -At -v ON_ERROR_STOP=1 -c "
+            DO \$rb\$
+            BEGIN
+              IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='client' AND column_name='client_type'
+              ) THEN
+                RAISE EXCEPTION 'rollback não restaurou client.client_type';
+              END IF;
+              IF to_regclass('public.client_type') IS NOT NULL THEN
+                RAISE EXCEPTION 'rollback não removeu a lookup client_type';
+              END IF;
+            END
+            \$rb\$;
+          "
+          echo "Rollback estrutural validado."
