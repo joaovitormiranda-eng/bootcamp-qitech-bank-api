@@ -4,7 +4,7 @@
 
 O projeto implementa o ciclo bancário básico de uma plataforma parceira: cadastro de pessoas físicas (PF) e jurídicas (PJ), análise cadastral, abertura e gerenciamento de contas, depósitos, transferências e consulta de extrato. A solução prioriza **consistência financeira, integridade dos estados, idempotência, concorrência e rastreabilidade**, com desenvolvimento orientado a testes (**TDD — RED → GREEN → REFACTOR**).
 
-> **Entrega — 12/10/2026:** as **10 rotas (R01–R10)** estão integradas à `main`. A última regressão integrada informada pela equipe concluiu com **442 testes aprovados em 64,58 s**. Esses números registram uma execução validada, não uma promessa de resultado em qualquer ambiente.
+> **Entrega (12/10/2026):** as **10 rotas (R01–R10)** estão integradas à `main`. A última regressão integrada informada pela equipe concluiu com **442 testes aprovados em 64,58 s**. Esses números registram uma execução específica validada, não uma promessa de resultado em qualquer ambiente. A evidência reprodutível e autoritativa da suíte completa passou a ser o pipeline de **Integração Contínua** (`.github/workflows/ci.yml`): o resultado verde deve ser lido na aba **Actions** do repositório após a execução do workflow. Veja a seção [CI / Integração contínua](#ci--integração-contínua).
 
 ## Quick start
 
@@ -152,9 +152,54 @@ docker compose stop
 
 As portas locais de referência são **3000** (API), **5432** (PostgreSQL principal) e **1080** (MockServer, quando habilitado). Os valores de `.env.example` e as credenciais de desenvolvimento são destinados **somente ao ambiente local**. O script [`database/database.sql`](database/database.sql) inicializa o esquema no primeiro provisionamento de um volume PostgreSQL vazio; reconstruir um container não reinicializa automaticamente um volume persistente.
 
+## CI / Integração contínua
+
+[![CI - full test suite](https://img.shields.io/badge/CI-full%20test%20suite-informational)](../../actions/workflows/ci.yml)
+
+> O badge acima é um placeholder; a URL definitiva para o fork
+> `joaovitormiranda-eng/bootcamp-qitech-bank-api` será finalizada após a
+> primeira execução do workflow.
+
+O workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) é a forma
+**sancionada e reprodutível** de executar a suíte completa (442 testes: unitários,
+integração HTTP e esquema). A cada `push` e `pull_request` ele provisiona, em um
+runner `ubuntu-latest`, toda a infraestrutura que os testes exigem e executa
+`pytest` como único portão de aprovação do job:
+
+- **PostgreSQL** (`postgres:16`), com os bancos `bootcamp` (API) e `bootcamp_test`
+  (testes de esquema) no mesmo servidor; `database/database.sql` é carregado em
+  `bootcamp`.
+- **MockServer** (`mockserver/mockserver:8.0.0`) como provedor cadastral simulado;
+  os testes da R03 configuram as expectativas em tempo de execução pela API de
+  controle.
+- **API viva** via `uvicorn app:app` em `127.0.0.1:3001`, aguardada até
+  `/health_check` responder **204** antes de rodar a suíte.
+
+**A evidência verde autoritativa é a execução do workflow na aba Actions do
+repositório**, não uma garantia independente de ambiente. Nenhum resultado verde
+novo foi fabricado neste README: o número de testes aprovados e o tempo devem ser
+lidos no log do GitHub Actions após a execução do CI. O artefato `pytest-results`
+publicado pelo job contém o relatório JUnit (`pytest-results.xml`) e o `api.log`.
+
+Localmente, a suíte completa continua dependendo de **Docker**, conforme descrito
+na seção abaixo. Sem Docker (ou sem PostgreSQL + MockServer + API disponíveis no
+host), apenas os testes unitários isolados rodam de ponta a ponta:
+
+```bash
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pytest tests/unit -q
+```
+
 ## Executar os testes
 
 A suíte inclui testes de contrato HTTP, regras de domínio, persistência, estados, idempotência, concorrência, rollback, movimentações financeiras e extrato.
+
+> **Docker é obrigatório para a execução local completa.** Os testes de
+> integração HTTP exigem a API viva, o PostgreSQL e o MockServer no ar ao mesmo
+> tempo; a stack do Compose provê exatamente esses serviços. Para uma execução
+> reprodutível sem configurar a infraestrutura à mão, prefira o pipeline de CI
+> descrito em [CI / Integração contínua](#ci--integração-contínua).
 
 ### 1. Instalar as dependências de desenvolvimento (PowerShell)
 
@@ -195,9 +240,31 @@ Para executar somente os testes físicos do esquema:
 .\.venv\Scripts\python.exe -m pytest tests/integration/database -q
 ```
 
-**Última regressão integrada informada pela equipe:** `442 passed in 64.58s` (12/10/2026).
+No Linux/macOS, exporte as mesmas variáveis com `export` (por exemplo
+`export SERVER_LOCALHOST=127.0.0.1`) e use `.venv/bin/python -m pytest -q`. As
+variáveis aceitas pela suíte (com os defaults de `tests/conftest.py`) são
+`DATABASE_URL`, `TEST_DATABASE_URL`, `ANALYSIS_PROVIDER_URL`, `MOCKSERVER_URL`,
+`SERVER_LOCALHOST`, `API_PORT`, `INTERNAL_TOKEN` e `ANALYSIS_PROVIDER_TIMEOUT`.
+Elas precisam apontar para os serviços que você subiu. O workflow
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) é a referência exata desse
+mapeamento, pois executa o mesmo `pytest` contra uma stack totalmente provisionada.
 
-**Isolamento:** o banco `bootcamp_test` destina-se aos testes de esquema, mas certos testes HTTP de integração podem criar **dados exclusivamente de teste** no banco local principal por meio da API. Não execute a suíte apontando a aplicação para um banco de produção ou com dados reais. Para parar somente o banco de testes:
+**Resultado dos testes:** `442 passed in 64.58s` (12/10/2026) é uma execução
+específica validada reportada pela equipe, **não** uma garantia independente de
+ambiente. A evidência de reprodução do P0 vem da execução do workflow de CI; leia
+o número de testes aprovados e o tempo na aba **Actions** do repositório após o
+CI rodar. Este README não cita uma contagem verde nova porque nenhuma execução de
+CI foi realizada nesta sessão.
+
+**Isolamento e segurança do reset destrutivo:** o reset de esquema em
+`tests/utils/db_utils.py` executa **`DROP SCHEMA public CASCADE`** e recria o
+schema a partir de `database/database.sql`. Isso **apaga todas as tabelas** do
+banco apontado. Por isso a função só prossegue quando o nome do banco termina em
+`_test`, e o `TEST_DATABASE_URL` deve **sempre** apontar para o banco efêmero
+`bootcamp_test`, **nunca** para um banco compartilhado, principal ou de produção.
+Além disso, certos testes HTTP de integração podem criar **dados exclusivamente de
+teste** no banco principal por meio da API; não execute a suíte apontando a
+aplicação para um banco com dados reais. Para parar somente o banco de testes:
 
 ```powershell
 docker compose -f compose.test.yml stop db_test
@@ -207,6 +274,9 @@ docker compose -f compose.test.yml stop db_test
 
 ```text
 bootcamp-qitech-bank-api/
+├── .github/
+│   └── workflows/
+│       └── ci.yml             # Pipeline de CI: stack completa + suíte pytest
 ├── src/                       # API, regras de negócio e persistência
 ├── database/
 │   └── database.sql           # Esquema PostgreSQL
