@@ -1,4 +1,4 @@
-﻿"""Primeiro ciclo HTTP da R07: happy path de DEPOSIT."""
+"""Primeiro ciclo HTTP da R07: happy path de DEPOSIT (black-box + hash SQL)."""
 
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -9,18 +9,35 @@ from sqlalchemy.engine import Engine
 
 from tests.integration.transaction.support import (
     TRANSACTION_RESPONSE_FIELDS,
-    read_deposit_state as _read_deposit_state,
+    get_account_via_api,
+    list_statement_via_api,
+    open_funded_account_via_api,
     send_deposit as _send_deposit,
-    set_account_status as _set_account_status,
 )
 from tests.utils import INTERNAL_TOKEN
 from tests.utils.requisition import ClientRequisition
 
 
+def _patch_account_status(account_key: str, status: str) -> None:
+    response = ClientRequisition.send(
+        "PATCH",
+        f"/account/{account_key}",
+        headers={"INTERNAL-TOKEN": INTERNAL_TOKEN},
+        payload={
+            "status": status,
+            "reason": "Preparação do cenário de teste da R07",
+        },
+    )
+    assert response.response_status == 200, (
+        f"R06 PATCH failed: {response.response_status} "
+        f"{response.response_content!r}"
+    )
+
+
 def test_deposit_returns_created_transaction(
-    active_account_key: str,
     api_database_engine: Engine,
 ) -> None:
+    active_account_key = open_funded_account_via_api()
     idempotency_key = uuid4()
     response = ClientRequisition.send(
         "POST",
@@ -55,16 +72,35 @@ def test_deposit_returns_created_transaction(
     assert parsed_created_at.tzinfo is not None
     assert parsed_created_at.utcoffset() == timezone.utc.utcoffset(parsed_created_at)
 
+    # Lançamento único observável via R08, com balance_after publicado.
+    entries = list_statement_via_api(active_account_key)["data"]
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["transaction_key"] == response_body["transaction_key"]
+    assert entry["transaction_type"] == "DEPOSIT"
+    assert entry["counterparty_account_key"] is None
+    assert entry["direction"] == "CREDIT"
+    assert entry["entry_type"] == "PRINCIPAL"
+    assert entry["amount_cents"] == 50_000
+    assert entry["balance_after_cents"] == 50_000
+    assert entry["created_at"] == created_at
+    assert all(persisted["entry_type"] != "FEE" for persisted in entries)
+
+    # Saldo e updated_at via R05 (updated_at acompanha o created_at).
+    persisted_account = get_account_via_api(active_account_key)
+    assert persisted_account["balance_cents"] == 50_000
+    assert persisted_account["updated_at"] == created_at
+
+    # request_hash (SHA-256) não tem projeção HTTP: leitura SQL mínima só
+    # para essa asserção de persistência.
     canonical_request = f"DEPOSIT|{active_account_key}|50000"
     expected_request_hash = sha256(canonical_request.encode("utf-8")).hexdigest()
-
     with api_database_engine.connect() as connection:
         connection.exec_driver_sql("SET TRANSACTION READ ONLY")
         transactions = connection.execute(
             text(
                 """
-                SELECT id, transaction_key, request_control_key, request_hash,
-                       transaction_type, created_at
+                SELECT transaction_key, request_control_key, request_hash
                 FROM financial_transaction
                 WHERE request_control_key = :request_control_key
                 """
@@ -77,58 +113,11 @@ def test_deposit_returns_created_transaction(
     assert str(transaction["transaction_key"]) == response_body["transaction_key"]
     assert transaction["request_control_key"] == idempotency_key
     assert transaction["request_hash"] == expected_request_hash
-    assert transaction["transaction_type"] == "DEPOSIT"
-    assert transaction["created_at"] == parsed_created_at
-
-    with api_database_engine.connect() as connection:
-        connection.exec_driver_sql("SET TRANSACTION READ ONLY")
-        entries = connection.execute(
-            text(
-                """
-                SELECT entry.transaction_id, entry.direction, entry.entry_type,
-                       entry.amount_cents, entry.balance_after_cents,
-                       entry.created_at, account.account_key
-                FROM transaction_entry AS entry
-                JOIN account ON account.id = entry.account_id
-                WHERE entry.transaction_id = :transaction_id
-                ORDER BY entry.id
-                """
-            ),
-            {"transaction_id": transaction["id"]},
-        ).mappings().all()
-
-    assert len(entries) == 1
-    entry = entries[0]
-    assert entry["transaction_id"] == transaction["id"]
-    assert entry["account_key"] == UUID(active_account_key)
-    assert entry["direction"] == "CREDIT"
-    assert entry["entry_type"] == "PRINCIPAL"
-    assert entry["amount_cents"] == 50_000
-    assert entry["balance_after_cents"] == 50_000
-    assert entry["created_at"] == transaction["created_at"]
-    assert all(persisted["entry_type"] != "FEE" for persisted in entries)
-
-    with api_database_engine.connect() as connection:
-        connection.exec_driver_sql("SET TRANSACTION READ ONLY")
-        persisted_account = connection.execute(
-            text(
-                """
-                SELECT balance_cents, updated_at
-                FROM account
-                WHERE account_key = :account_key
-                """
-            ),
-            {"account_key": UUID(active_account_key)},
-        ).mappings().one()
-
-    assert persisted_account["balance_cents"] == 50_000
-    assert persisted_account["updated_at"] == transaction["created_at"]
 
 
 def test_deposit_replays_original_transaction_for_same_idempotency_key(
-    active_account_key: str,
-    api_database_engine: Engine,
 ) -> None:
+    active_account_key = open_funded_account_via_api()
     idempotency_key = uuid4()
 
     first_response = _send_deposit(active_account_key, idempotency_key)
@@ -145,87 +134,63 @@ def test_deposit_replays_original_transaction_for_same_idempotency_key(
     assert isinstance(UUID(original_transaction["transaction_key"]), UUID)
     assert original_transaction["created_at"].endswith("Z")
 
-    state_after_first_request = _read_deposit_state(
-        api_database_engine,
-        active_account_key,
-        idempotency_key,
-    )
-    assert state_after_first_request["balance_cents"] == 50_000
-    assert len(state_after_first_request["transactions"]) == 1
-    assert len(state_after_first_request["entries"]) == 1
-
-    original_entry = state_after_first_request["entries"][0]
+    assert get_account_via_api(active_account_key)["balance_cents"] == 50_000
+    entries_after_first = list_statement_via_api(active_account_key)["data"]
+    assert len(entries_after_first) == 1
+    original_entry = entries_after_first[0]
     assert original_entry["direction"] == "CREDIT"
     assert original_entry["entry_type"] == "PRINCIPAL"
     assert original_entry["amount_cents"] == 50_000
 
     second_response = _send_deposit(active_account_key, idempotency_key)
-    state_after_second_request = _read_deposit_state(
-        api_database_engine,
-        active_account_key,
-        idempotency_key,
-    )
 
     observed_body = (
         second_response.response_json
         if second_response.response_json is not None
         else second_response.response_content.decode(errors="replace")
     )
+    entries_after_second = list_statement_via_api(active_account_key)["data"]
     assert second_response.response_status == 201, (
         f"second response was {second_response.response_status}: "
         f"{observed_body!r}; original transaction_key="
-        f"{original_transaction['transaction_key']}; persisted state: "
-        f"balance={state_after_second_request['balance_cents']}, "
-        f"transactions={len(state_after_second_request['transactions'])}, "
-        f"entries={len(state_after_second_request['entries'])}"
+        f"{original_transaction['transaction_key']}; entries now: "
+        f"{len(entries_after_second)}"
     )
     assert second_response.response_json == original_transaction
-    assert state_after_second_request["balance_cents"] == 50_000
-    assert len(state_after_second_request["transactions"]) == 1
-    assert len(state_after_second_request["entries"]) == 1
-    assert state_after_second_request["entries"][0] == original_entry
+    assert get_account_via_api(active_account_key)["balance_cents"] == 50_000
+    assert len(entries_after_second) == 1
+    assert entries_after_second[0] == original_entry
 
 
 def test_deposit_replay_ignores_current_inactive_account_status(
-    active_account_key: str,
-    api_database_engine: Engine,
 ) -> None:
+    active_account_key = open_funded_account_via_api()
     idempotency_key = uuid4()
     first_response = _send_deposit(active_account_key, idempotency_key)
     assert first_response.response_status == 201
 
     original_transaction = first_response.response_json
-    state_after_original = _read_deposit_state(
-        api_database_engine,
-        active_account_key,
-        idempotency_key,
-    )
-    _set_account_status(
-        api_database_engine,
-        active_account_key,
-        "INACTIVE",
-    )
+    updated_at_after_original = get_account_via_api(
+        active_account_key
+    )["updated_at"]
+    _patch_account_status(active_account_key, "INACTIVE")
 
     replay_response = _send_deposit(active_account_key, idempotency_key)
-    state_after_replay = _read_deposit_state(
-        api_database_engine,
-        active_account_key,
-        idempotency_key,
-    )
+    account_after_replay = get_account_via_api(active_account_key)
+    entries_after_replay = list_statement_via_api(active_account_key)["data"]
 
     assert replay_response.response_status == 201
     assert replay_response.response_json == original_transaction
-    assert state_after_replay["status"] == "INACTIVE"
-    assert state_after_replay["balance_cents"] == 50_000
-    assert state_after_replay["updated_at"] == state_after_original["updated_at"]
-    assert len(state_after_replay["transactions"]) == 1
-    assert len(state_after_replay["entries"]) == 1
+    assert account_after_replay["status"] == "INACTIVE"
+    assert account_after_replay["balance_cents"] == 50_000
+    # O replay não movimenta nem altera o updated_at da conta.
+    assert account_after_replay["updated_at"] == updated_at_after_original
+    assert len(entries_after_replay) == 1
 
 
 def test_deposit_rejects_same_idempotency_key_for_different_intention(
-    active_account_key: str,
-    api_database_engine: Engine,
 ) -> None:
+    active_account_key = open_funded_account_via_api()
     idempotency_key = uuid4()
     original_response = _send_deposit(active_account_key, idempotency_key)
     assert original_response.response_status == 201
@@ -235,24 +200,19 @@ def test_deposit_rejects_same_idempotency_key_for_different_intention(
         idempotency_key,
         amount_cents=60_000,
     )
-    persisted_state = _read_deposit_state(
-        api_database_engine,
-        active_account_key,
-        idempotency_key,
-    )
 
     assert conflict_response.response_status == 409
     assert conflict_response.response_json["code"] == "TRX0003"
-    assert persisted_state["balance_cents"] == 50_000
-    assert len(persisted_state["transactions"]) == 1
-    assert len(persisted_state["entries"]) == 1
-    assert persisted_state["entries"][0]["amount_cents"] == 50_000
+    assert get_account_via_api(active_account_key)["balance_cents"] == 50_000
+    entries = list_statement_via_api(active_account_key)["data"]
+    assert len(entries) == 1
+    assert entries[0]["amount_cents"] == 50_000
 
 
 def test_deposit_with_new_idempotency_key_creates_new_transaction(
-    active_account_key: str,
     api_database_engine: Engine,
 ) -> None:
+    active_account_key = open_funded_account_via_api()
     first_key = uuid4()
     second_key = uuid4()
 
@@ -266,22 +226,29 @@ def test_deposit_with_new_idempotency_key_creates_new_transaction(
         != second_response.response_json["transaction_key"]
     )
 
-    first_state = _read_deposit_state(
-        api_database_engine,
-        active_account_key,
-        first_key,
-    )
-    second_state = _read_deposit_state(
-        api_database_engine,
-        active_account_key,
-        second_key,
-    )
-    assert second_state["balance_cents"] == 100_000
-    assert len(first_state["transactions"]) == 1
-    assert len(first_state["entries"]) == 1
-    assert len(second_state["transactions"]) == 1
-    assert len(second_state["entries"]) == 1
-    assert (
-        first_state["transactions"][0]["request_hash"]
-        == second_state["transactions"][0]["request_hash"]
-    )
+    assert get_account_via_api(active_account_key)["balance_cents"] == 100_000
+    entries = list_statement_via_api(active_account_key)["data"]
+    assert len(entries) == 2
+    assert {entry["transaction_key"] for entry in entries} == {
+        first_response.response_json["transaction_key"],
+        second_response.response_json["transaction_key"],
+    }
+    assert all(entry["amount_cents"] == 50_000 for entry in entries)
+
+    # request_hash não tem projeção HTTP: leitura SQL mínima para provar que
+    # depósitos idênticos produzem o mesmo hash canônico (SHA-256).
+    with api_database_engine.connect() as connection:
+        connection.exec_driver_sql("SET TRANSACTION READ ONLY")
+        hashes = connection.execute(
+            text(
+                """
+                SELECT request_hash
+                FROM financial_transaction
+                WHERE request_control_key IN (:first_key, :second_key)
+                """
+            ),
+            {"first_key": first_key, "second_key": second_key},
+        ).scalars().all()
+
+    assert len(hashes) == 2
+    assert hashes[0] == hashes[1]

@@ -6,7 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from tests.integration.transaction.support import (
-    create_account,
+    open_funded_account_via_api,
     send_deposit,
     send_transfer,
 )
@@ -56,7 +56,7 @@ def test_statement_orders_transactions_by_financial_transaction_timestamp(
     order_by: str,
     expected_order: tuple[str, str],
 ) -> None:
-    account_key = create_account(api_database_engine)
+    account_key = open_funded_account_via_api()
     older_response = send_deposit(account_key, uuid4(), amount_cents=10_000)
     newer_response = send_deposit(account_key, uuid4(), amount_cents=20_000)
     assert older_response.response_status == 201
@@ -100,7 +100,7 @@ def test_statement_uses_financial_transaction_id_to_break_timestamp_ties(
     api_database_engine: Engine,
     order_by: str,
 ) -> None:
-    account_key = create_account(api_database_engine)
+    account_key = open_funded_account_via_api()
     first_response = send_deposit(account_key, uuid4(), amount_cents=10_000)
     second_response = send_deposit(account_key, uuid4(), amount_cents=20_000)
     assert first_response.response_status == 201
@@ -146,15 +146,13 @@ def test_statement_uses_financial_transaction_id_to_break_timestamp_ties(
 
 @pytest.mark.parametrize("order_by", ["asc", "desc"])
 def test_statement_keeps_transfer_principal_before_fee(
-    api_database_engine: Engine,
     order_by: str,
 ) -> None:
-    source_account_key = create_account(
-        api_database_engine,
+    source_account_key = open_funded_account_via_api(
         client_type="INDIVIDUAL",
         balance_cents=100_000,
     )
-    target_account_key = create_account(api_database_engine)
+    target_account_key = open_funded_account_via_api()
     transfer_response = send_transfer(
         source_account_key,
         target_account_key,

@@ -1,26 +1,20 @@
-"""Idempotência sequencial e replay histórico da TRANSFER."""
+"""Idempotência sequencial e replay histórico da TRANSFER (black-box)."""
 
 from uuid import uuid4
 
-from sqlalchemy.engine import Engine
-
 from tests.integration.transaction.support import (
-    create_account,
-    read_transfer_state,
+    get_account_via_api,
+    list_statement_via_api,
+    open_funded_account_via_api,
     send_transfer,
 )
 from tests.utils import INTERNAL_TOKEN
 from tests.utils.requisition import ClientRequisition
 
 
-def test_transfer_replays_original_transaction_without_new_movement(
-    api_database_engine: Engine,
-) -> None:
-    source_key = create_account(
-        api_database_engine,
-        balance_cents=100_000,
-    )
-    target_key = create_account(api_database_engine)
+def test_transfer_replays_original_transaction_without_new_movement() -> None:
+    source_key = open_funded_account_via_api(balance_cents=100_000)
+    target_key = open_funded_account_via_api()
     idempotency_key = uuid4()
 
     original_response = send_transfer(
@@ -33,31 +27,34 @@ def test_transfer_replays_original_transaction_without_new_movement(
         target_key,
         idempotency_key,
     )
-    state = read_transfer_state(
-        api_database_engine,
-        source_key,
-        target_key,
-        idempotency_key,
-    )
 
     assert original_response.response_status == 201
     assert replay_response.response_status == 201
     assert replay_response.response_json == original_response.response_json
     assert replay_response.response_json["fee_cents"] == 250
-    assert state["source"]["balance_cents"] == 49_750
-    assert state["target"]["balance_cents"] == 50_000
-    assert len(state["transactions"]) == 1
-    assert len(state["entries"]) == 3
+
+    assert get_account_via_api(source_key)["balance_cents"] == 49_750
+    assert get_account_via_api(target_key)["balance_cents"] == 50_000
+
+    # Nenhum movimento adicional: origem mantém PRINCIPAL+FEE e destino o
+    # único CREDIT, mesmo após o replay.
+    source_entries = list_statement_via_api(source_key)["data"]
+    target_entries = list_statement_via_api(target_key)["data"]
+    assert {entry["entry_type"] for entry in source_entries} == {
+        "PRINCIPAL",
+        "FEE",
+    }
+    assert len(source_entries) == 2
+    assert len(target_entries) == 1
+    assert {
+        entry["transaction_key"]
+        for entry in source_entries + target_entries
+    } == {original_response.response_json["transaction_key"]}
 
 
-def test_transfer_rejects_same_key_for_different_intention(
-    api_database_engine: Engine,
-) -> None:
-    source_key = create_account(
-        api_database_engine,
-        balance_cents=100_000,
-    )
-    target_key = create_account(api_database_engine)
+def test_transfer_rejects_same_key_for_different_intention() -> None:
+    source_key = open_funded_account_via_api(balance_cents=100_000)
+    target_key = open_funded_account_via_api()
     idempotency_key = uuid4()
 
     original_response = send_transfer(
@@ -72,30 +69,24 @@ def test_transfer_rejects_same_key_for_different_intention(
         idempotency_key,
         60_000,
     )
-    state = read_transfer_state(
-        api_database_engine,
-        source_key,
-        target_key,
-        idempotency_key,
-    )
 
     assert original_response.response_status == 201
     assert conflict_response.response_status == 409
     assert conflict_response.response_json["code"] == "TRX0003"
-    assert state["source"]["balance_cents"] == 49_750
-    assert state["target"]["balance_cents"] == 50_000
-    assert len(state["transactions"]) == 1
-    assert len(state["entries"]) == 3
+
+    assert get_account_via_api(source_key)["balance_cents"] == 49_750
+    assert get_account_via_api(target_key)["balance_cents"] == 50_000
+
+    source_entries = list_statement_via_api(source_key)["data"]
+    target_entries = list_statement_via_api(target_key)["data"]
+    assert len(source_entries) == 2
+    assert len(target_entries) == 1
 
 
 def test_transfer_replay_survives_real_r06_closure_but_new_operation_does_not(
-    api_database_engine: Engine,
 ) -> None:
-    source_key = create_account(
-        api_database_engine,
-        balance_cents=50_250,
-    )
-    target_key = create_account(api_database_engine)
+    source_key = open_funded_account_via_api(balance_cents=50_250)
+    target_key = open_funded_account_via_api()
     original_key = uuid4()
 
     original_response = send_transfer(
@@ -103,15 +94,9 @@ def test_transfer_replay_survives_real_r06_closure_but_new_operation_does_not(
         target_key,
         original_key,
     )
-    state_after_original = read_transfer_state(
-        api_database_engine,
-        source_key,
-        target_key,
-        original_key,
-    )
     assert original_response.response_status == 201
-    assert state_after_original["source"]["balance_cents"] == 0
-    assert state_after_original["target"]["balance_cents"] == 50_000
+    assert get_account_via_api(source_key)["balance_cents"] == 0
+    assert get_account_via_api(target_key)["balance_cents"] == 50_000
 
     close_response = ClientRequisition.send(
         "PATCH",
@@ -133,21 +118,24 @@ def test_transfer_replay_survives_real_r06_closure_but_new_operation_does_not(
         target_key,
         original_key,
     )
-    state_after_replay = read_transfer_state(
-        api_database_engine,
-        source_key,
-        target_key,
-        original_key,
-    )
 
     assert replay_response.response_status == 201
     assert replay_response.response_json == original_response.response_json
     assert replay_response.response_json["fee_cents"] == 250
-    assert state_after_replay["source"]["status"] == "CLOSED"
-    assert state_after_replay["source"]["balance_cents"] == 0
-    assert state_after_replay["target"]["balance_cents"] == 50_000
-    assert len(state_after_replay["transactions"]) == 1
-    assert len(state_after_replay["entries"]) == 3
+
+    source_after_replay = get_account_via_api(source_key)
+    assert source_after_replay["status"] == "CLOSED"
+    assert source_after_replay["balance_cents"] == 0
+    assert get_account_via_api(target_key)["balance_cents"] == 50_000
+
+    source_entries = list_statement_via_api(source_key)["data"]
+    target_entries = list_statement_via_api(target_key)["data"]
+    assert len(source_entries) == 2
+    assert len(target_entries) == 1
+    assert {
+        entry["transaction_key"]
+        for entry in source_entries + target_entries
+    } == {original_response.response_json["transaction_key"]}
 
     new_key = uuid4()
     new_response = send_transfer(
@@ -155,17 +143,21 @@ def test_transfer_replay_survives_real_r06_closure_but_new_operation_does_not(
         target_key,
         new_key,
     )
-    new_state = read_transfer_state(
-        api_database_engine,
-        source_key,
-        target_key,
-        new_key,
-    )
 
     assert new_response.response_status == 409
     assert new_response.response_json["code"] == "ACC0005"
-    assert new_state["source"]["status"] == "CLOSED"
-    assert new_state["source"]["balance_cents"] == 0
-    assert new_state["target"]["balance_cents"] == 50_000
-    assert new_state["transactions"] == []
-    assert new_state["entries"] == []
+
+    new_source = get_account_via_api(source_key)
+    assert new_source["status"] == "CLOSED"
+    assert new_source["balance_cents"] == 0
+    assert get_account_via_api(target_key)["balance_cents"] == 50_000
+
+    # Nenhuma nova movimentação foi criada pela operação rejeitada.
+    source_entries_after = list_statement_via_api(source_key)["data"]
+    target_entries_after = list_statement_via_api(target_key)["data"]
+    assert len(source_entries_after) == 2
+    assert len(target_entries_after) == 1
+    assert {
+        entry["transaction_key"]
+        for entry in source_entries_after + target_entries_after
+    } == {original_response.response_json["transaction_key"]}

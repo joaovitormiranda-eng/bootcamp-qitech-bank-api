@@ -6,7 +6,10 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from tests.integration.transaction.support import create_account, send_deposit
+from tests.integration.transaction.support import (
+    open_funded_account_via_api,
+    send_deposit,
+)
 from tests.utils import INTERNAL_TOKEN
 from tests.utils.requisition import ClientRequisition
 
@@ -94,11 +97,10 @@ def _create_deposit_at(
     ["2026-02-30", "2026-13-01", "2026-00-10"],
 )
 def test_statement_rejects_impossible_civil_dates(
-    api_database_engine: Engine,
     date_param: str,
     invalid_date: str,
 ) -> None:
-    account_key = create_account(api_database_engine)
+    account_key = open_funded_account_via_api()
 
     response = ClientRequisition.send(
         "GET",
@@ -116,7 +118,7 @@ def test_statement_applies_date_from_in_client_timezone(
 ) -> None:
     timezone_name = "America/Sao_Paulo"
     client_timezone = ZoneInfo(timezone_name)
-    account_key = create_account(api_database_engine)
+    account_key = open_funded_account_via_api()
     _set_client_timezone(api_database_engine, account_key, timezone_name)
 
     before_key = _create_deposit_at(
@@ -161,7 +163,7 @@ def test_statement_applies_inclusive_date_to_with_exclusive_upper_bound(
 ) -> None:
     timezone_name = "America/Sao_Paulo"
     client_timezone = ZoneInfo(timezone_name)
-    account_key = create_account(api_database_engine)
+    account_key = open_funded_account_via_api()
     _set_client_timezone(api_database_engine, account_key, timezone_name)
 
     older_key = _create_deposit_at(
@@ -206,7 +208,7 @@ def test_statement_filters_a_complete_local_day(
 ) -> None:
     timezone_name = "America/Sao_Paulo"
     client_timezone = ZoneInfo(timezone_name)
-    account_key = create_account(api_database_engine)
+    account_key = open_funded_account_via_api()
     _set_client_timezone(api_database_engine, account_key, timezone_name)
 
     before_key = _create_deposit_at(
@@ -264,10 +266,8 @@ def test_statement_filters_a_complete_local_day(
     assert upper_bound_key not in returned_keys
 
 
-def test_statement_rejects_inverted_date_range(
-    api_database_engine: Engine,
-) -> None:
-    account_key = create_account(api_database_engine)
+def test_statement_rejects_inverted_date_range() -> None:
+    account_key = open_funded_account_via_api()
 
     response = _get_statement(
         account_key,
@@ -284,7 +284,7 @@ def test_statement_uses_manaus_timezone_at_local_day_boundary(
 ) -> None:
     timezone_name = "America/Manaus"
     client_timezone = ZoneInfo(timezone_name)
-    account_key = create_account(api_database_engine)
+    account_key = open_funded_account_via_api()
     _set_client_timezone(api_database_engine, account_key, timezone_name)
 
     previous_local_day_key = _create_deposit_at(
@@ -321,7 +321,7 @@ def test_statement_date_filter_uses_financial_transaction_timestamp(
 ) -> None:
     timezone_name = "America/Sao_Paulo"
     client_timezone = ZoneInfo(timezone_name)
-    account_key = create_account(api_database_engine)
+    account_key = open_funded_account_via_api()
     _set_client_timezone(api_database_engine, account_key, timezone_name)
     transaction_key = _create_deposit_at(
         api_database_engine,
@@ -350,7 +350,7 @@ def test_statement_filters_before_applying_pagination(
 ) -> None:
     timezone_name = "America/Sao_Paulo"
     client_timezone = ZoneInfo(timezone_name)
-    account_key = create_account(api_database_engine)
+    account_key = open_funded_account_via_api()
     _set_client_timezone(api_database_engine, account_key, timezone_name)
     _create_deposit_at(
         api_database_engine,

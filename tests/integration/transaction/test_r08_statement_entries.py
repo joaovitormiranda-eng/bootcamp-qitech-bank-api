@@ -5,7 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from tests.integration.transaction.support import (
-    create_account,
+    open_funded_account_via_api,
     send_deposit,
     send_transfer,
 )
@@ -22,10 +22,8 @@ def _get_statement(account_key: str, *, order_by: str = "desc"):
     )
 
 
-def test_statement_returns_deposit_entry_from_persisted_history(
-    api_database_engine: Engine,
-) -> None:
-    account_key = create_account(api_database_engine)
+def test_statement_returns_deposit_entry_from_persisted_history() -> None:
+    account_key = open_funded_account_via_api()
     deposit_response = send_deposit(account_key, uuid4(), amount_cents=50_000)
 
     assert deposit_response.response_status == 201
@@ -55,15 +53,12 @@ def test_statement_returns_deposit_entry_from_persisted_history(
     }
 
 
-def test_statement_returns_transfer_principal_and_fee_for_source(
-    api_database_engine: Engine,
-) -> None:
-    source_account_key = create_account(
-        api_database_engine,
+def test_statement_returns_transfer_principal_and_fee_for_source() -> None:
+    source_account_key = open_funded_account_via_api(
         client_type="INDIVIDUAL",
         balance_cents=100_000,
     )
-    target_account_key = create_account(api_database_engine)
+    target_account_key = open_funded_account_via_api()
     transfer_response = send_transfer(
         source_account_key,
         target_account_key,
@@ -106,15 +101,12 @@ def test_statement_returns_transfer_principal_and_fee_for_source(
     }
 
 
-def test_statement_returns_transfer_principal_for_target(
-    api_database_engine: Engine,
-) -> None:
-    source_account_key = create_account(
-        api_database_engine,
+def test_statement_returns_transfer_principal_for_target() -> None:
+    source_account_key = open_funded_account_via_api(
         client_type="INDIVIDUAL",
         balance_cents=100_000,
     )
-    target_account_key = create_account(api_database_engine)
+    target_account_key = open_funded_account_via_api()
     transfer_response = send_transfer(
         source_account_key,
         target_account_key,
@@ -145,7 +137,10 @@ def test_statement_returns_transfer_principal_for_target(
 def test_statement_uses_financial_transaction_timestamp(
     api_database_engine: Engine,
 ) -> None:
-    account_key = create_account(api_database_engine)
+    # Cenário de persistência legítimo: back-date de transaction_entry
+    # (created_at divergente do financial_transaction) só é produzível via
+    # SQL. A conta é preparada por API; o SQL fica restrito ao back-date.
+    account_key = open_funded_account_via_api()
     deposit_response = send_deposit(account_key, uuid4(), amount_cents=50_000)
 
     assert deposit_response.response_status == 201
