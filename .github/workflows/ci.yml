@@ -20,15 +20,23 @@ jobs:
     runs-on: ubuntu-latest
 
     # Topologia de serviços:
-    #   - postgres: um único servidor PostgreSQL 16 (igual ao database/Dockerfile).
-    #     Cria automaticamente apenas o banco bootcamp (POSTGRES_DB). O segundo
-    #     banco (bootcamp_test) é criado em um passo via psql.
+    #   - postgres_api: servidor PostgreSQL 16 do banco da API (bootcamp),
+    #     exposto em 127.0.0.1:5432. Cria automaticamente o banco bootcamp
+    #     (POSTGRES_DB); o schema (ERD) é carregado em um passo via psql.
+    #   - postgres_test: um SEGUNDO servidor PostgreSQL 16, FISICAMENTE separado,
+    #     para o banco de schema descartável (bootcamp_test), exposto em
+    #     127.0.0.1:5433. Precisa ser uma instância distinta porque as fixtures
+    #     de suporte (r04/r05/r06/r09) comparam o system_identifier retornado por
+    #     pg_control_system() — valor único POR CLUSTER físico — e exigem que o
+    #     banco da API e o banco de teste estejam em clusters diferentes. Ambos
+    #     os servidores ficam acessíveis em 127.0.0.1 (hosts idênticos, portas
+    #     distintas), satisfazendo também a asserção host in {localhost,127.0.0.1}.
     #   - mockserver: o provedor cadastral simulado (igual ao mockserver/Dockerfile,
     #     imagem 8.0.0). Os testes da R03 configuram expectativas em tempo de
     #     execução pela API de controle (MockServer.reset()/expect), portanto o
     #     JSON de seed NÃO é necessário para a instância de teste.
     services:
-      postgres:
+      postgres_api:
         image: postgres:16
         env:
           POSTGRES_USER: bootcamp
@@ -38,6 +46,20 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U bootcamp -d bootcamp"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+      postgres_test:
+        image: postgres:16
+        env:
+          POSTGRES_USER: bootcamp
+          POSTGRES_PASSWORD: bootcamp
+          POSTGRES_DB: bootcamp_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U bootcamp -d bootcamp_test"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
@@ -53,10 +75,12 @@ jobs:
       # então estas variáveis exportadas no job têm precedência.
       #
       # Banco da API (bootcamp) e banco de schema descartável (bootcamp_test)
-      # vivem no MESMO servidor PostgreSQL; as asserções dos conftests comparam
-      # o nome/URL do banco (não o host), então isto é seguro e correto.
+      # vivem em servidores PostgreSQL FISICAMENTE SEPARADOS (clusters distintos,
+      # system_identifier distinto): bootcamp em 127.0.0.1:5432 e bootcamp_test
+      # em 127.0.0.1:5433. As fixtures de suporte exigem essa separação física e
+      # também host in {localhost,127.0.0.1} para ambas as URLs.
       DATABASE_URL: postgresql+psycopg2://bootcamp:bootcamp@127.0.0.1:5432/bootcamp
-      TEST_DATABASE_URL: postgresql+psycopg2://bootcamp:bootcamp@127.0.0.1:5432/bootcamp_test
+      TEST_DATABASE_URL: postgresql+psycopg2://bootcamp:bootcamp@127.0.0.1:5433/bootcamp_test
       INTERNAL_TOKEN: default_token
       ANALYSIS_PROVIDER_URL: http://127.0.0.1:1080
       MOCKSERVER_URL: http://127.0.0.1:1080
@@ -81,29 +105,35 @@ jobs:
 
       - name: Wait for PostgreSQL
         run: |
-          for i in $(seq 1 30); do
-            if pg_isready -h 127.0.0.1 -p 5432 -U bootcamp >/dev/null 2>&1; then
-              echo "PostgreSQL pronto."
-              exit 0
-            fi
-            echo "Aguardando PostgreSQL... ($i)"
-            sleep 2
-          done
-          echo "PostgreSQL não ficou pronto a tempo." >&2
-          exit 1
+          # Aguarda AMBOS os servidores PostgreSQL: o da API (5432) e o de
+          # schema descartável (5433). Só prossegue quando os dois estão prontos.
+          wait_pg() {
+            local port="$1"
+            for i in $(seq 1 30); do
+              if pg_isready -h 127.0.0.1 -p "$port" -U bootcamp >/dev/null 2>&1; then
+                echo "PostgreSQL pronto na porta $port."
+                return 0
+              fi
+              echo "Aguardando PostgreSQL na porta $port... ($i)"
+              sleep 2
+            done
+            echo "PostgreSQL na porta $port não ficou pronto a tempo." >&2
+            return 1
+          }
+          wait_pg 5432
+          wait_pg 5433
 
-      - name: Create bootcamp_test database and load schema
+      - name: Load schema into API database
         env:
           PGPASSWORD: bootcamp
         run: |
-          # O servidor cria apenas o banco bootcamp (POSTGRES_DB). O banco de
-          # schema descartável precisa existir vazio: a fixture de sessão em
-          # tests/integration/database/conftest.py chama DbUtils.reset_schema,
-          # que executa DROP SCHEMA public CASCADE e reaplica database.sql.
-          # Isso é SEGURO apenas porque bootcamp_test é efêmero e termina em _test.
-          psql "postgresql://bootcamp:bootcamp@127.0.0.1:5432/postgres" \
-            -v ON_ERROR_STOP=1 -c "CREATE DATABASE bootcamp_test;"
-          # Carrega o schema (ERD) no banco da API.
+          # Carrega o schema (ERD) no banco da API (bootcamp, 127.0.0.1:5432).
+          # O banco de schema descartável bootcamp_test já é criado vazio pelo
+          # POSTGRES_DB do segundo servidor (127.0.0.1:5433): a fixture de sessão
+          # em tests/integration/database/conftest.py chama DbUtils.reset_schema,
+          # que executa DROP SCHEMA public CASCADE e reaplica database.sql, então
+          # NÃO carregamos schema ali. Isso é SEGURO apenas porque bootcamp_test
+          # é efêmero e termina em _test.
           psql "postgresql://bootcamp:bootcamp@127.0.0.1:5432/bootcamp" \
             -v ON_ERROR_STOP=1 -f database/database.sql
 
