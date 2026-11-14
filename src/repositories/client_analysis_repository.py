@@ -3,6 +3,7 @@ from uuid import UUID
 
 from database import Context
 from models import (
+    ActorType,
     Client,
     ClientStatus,
     ClientStatusEvent,
@@ -14,6 +15,14 @@ from models import (
 class ClientAnalysisRepository:
     def __init__(self, context: Context) -> None:
         self.session = context.db_session
+
+    def _actor_type_id(self, enumerator: str) -> int:
+        """Resolve o texto do ator para o id da lookup."""
+        return (
+            self.session.query(ActorType.id)
+            .filter(ActorType.enumerator == enumerator)
+            .scalar()
+        )
 
     def get_analysis_source(self, client_key: UUID) -> tuple[Client, str] | None:
         """Busca o cliente e seu CPF/CNPJ sem definir formato de transporte."""
@@ -81,7 +90,7 @@ class ClientAnalysisRepository:
         status_event.client_id = client.id
         status_event.from_status_id = from_status.id
         status_event.to_status_id = to_status.id
-        status_event.actor_type = actor_type
+        status_event.actor_type_id = self._actor_type_id(actor_type)
         status_event.reason = reason
         status_event.created_at = now
 

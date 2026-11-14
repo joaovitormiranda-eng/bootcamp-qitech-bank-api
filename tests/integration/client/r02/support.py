@@ -145,9 +145,12 @@ def _prepare_client_status(
         client = connection.execute(
             text(
                 """
-                SELECT c.id, c.email, c.client_type, s.enumerator AS status
+                SELECT c.id, c.email,
+                       client_type.enumerator AS client_type,
+                       s.enumerator AS status
                 FROM client AS c
                 JOIN client_status AS s ON s.id = c.status_id
+                JOIN client_type ON client_type.id = c.client_type_id
                 WHERE c.client_key = CAST(:client_key AS uuid)
                 """
             ),
@@ -162,10 +165,11 @@ def _prepare_client_status(
             text(
                 """
                 SELECT e.from_status_id, to_status.enumerator AS to_status,
-                       e.actor_type, e.reason
+                       actor_type.enumerator AS actor_type, e.reason
                 FROM client_status_event AS e
                 JOIN client_status AS to_status
                   ON to_status.id = e.to_status_id
+                JOIN actor_type ON actor_type.id = e.actor_type_id
                 WHERE e.client_id = :client_id
                 """
             ),
@@ -230,11 +234,13 @@ def _prepare_client_status(
                     """
                     INSERT INTO client_status_event (
                         client_id, from_status_id, to_status_id,
-                        actor_type, reason, created_at
+                        actor_type_id, reason, created_at
                     )
                     VALUES (
                         :client_id, :from_status_id, :to_status_id,
-                        'INTERNAL', :reason, :created_at
+                        (SELECT id FROM actor_type
+                         WHERE enumerator = 'INTERNAL'),
+                        :reason, :created_at
                     )
                     """
                 ),
@@ -283,12 +289,13 @@ def _prepare_client_status(
                 """
                 SELECT from_status.enumerator AS from_status,
                        to_status.enumerator AS to_status,
-                       e.actor_type, e.reason
+                       actor_type.enumerator AS actor_type, e.reason
                 FROM client_status_event AS e
                 LEFT JOIN client_status AS from_status
                   ON from_status.id = e.from_status_id
                 JOIN client_status AS to_status
                   ON to_status.id = e.to_status_id
+                JOIN actor_type ON actor_type.id = e.actor_type_id
                 WHERE e.client_id = :client_id
                 ORDER BY e.id
                 """

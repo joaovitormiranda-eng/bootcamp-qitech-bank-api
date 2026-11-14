@@ -194,10 +194,12 @@ def test_create_account_persists_account_and_initial_status_event(
                 """
                 SELECT event.account_id, event.from_status_id,
                        destination.enumerator AS to_status,
-                       event.actor_type, event.reason, event.created_at
+                       actor_type.enumerator AS actor_type,
+                       event.reason, event.created_at
                 FROM account_status_event AS event
                 JOIN account_status AS destination
                   ON destination.id = event.to_status_id
+                JOIN actor_type ON actor_type.id = event.actor_type_id
                 WHERE event.account_id = :account_id
                 """
             ),

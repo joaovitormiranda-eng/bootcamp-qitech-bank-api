@@ -47,14 +47,18 @@ class TestClientSchema:
     """Identidade do cliente, tipo PF/PJ e vínculo com o status atual."""
 
     def test_columns_and_primary_key(self, schema_engine):
-        """Tipos, nulidade e PK de client correspondem ao ERD v1.1."""
+        """Tipos, nulidade e PK de client correspondem ao ERD v1.2.
+
+        P1-D/COD-06: o tipo de cliente é normalizado como FK `client_type_id`
+        para a lookup `client_type` (em vez de VARCHAR + CHECK).
+        """
         assert_columns_and_primary_key(
             schema_engine,
             "client",
             {
                 "id": ("bigint", None, "NO"),
                 "client_key": ("uuid", None, "NO"),
-                "client_type": ("character varying", 20, "NO"),
+                "client_type_id": ("bigint", None, "NO"),
                 "email": ("character varying", 254, "NO"),
                 "timezone": ("character varying", 64, "NO"),
                 "status_id": ("bigint", None, "NO"),
@@ -64,13 +68,20 @@ class TestClientSchema:
             ["id"],
         )
 
-    def test_status_foreign_key_is_restricted(self, schema_engine):
-        """status_id referencia client_status sem exclusão em cascata."""
+    def test_foreign_keys_are_restricted(self, schema_engine):
+        """status_id e client_type_id referenciam suas lookups sem cascata."""
         assert_foreign_keys(
             schema_engine,
             "client",
-            {("status_id", "client_status", "id", "RESTRICT")},
+            {
+                ("status_id", "client_status", "id", "RESTRICT"),
+                ("client_type_id", "client_type", "id", "RESTRICT"),
+            },
         )
+
+    def test_client_type_index(self, schema_engine):
+        """A busca por tipo de cliente tem o índice aprovado no ERD v1.2."""
+        assert_index(schema_engine, "client", "idx_client_type", ["client_type_id"])
 
     @pytest.mark.parametrize("column_name", ["client_key", "email"])
     def test_business_key_is_unique(self, schema_engine, column_name):
@@ -82,10 +93,36 @@ class TestClientSchema:
         assert_index(schema_engine, "client", "idx_client_status", ["status_id"])
 
     def test_rejects_unknown_client_type(self, db_connection):
-        """Somente INDIVIDUAL e COMPANY são tipos persistíveis."""
+        """Somente os tipos presentes na lookup são aceitos (FK, não CHECK).
+
+        P1-D/COD-06: a integridade do tipo passa a ser referencial. Inserir um
+        `client_type_id` inexistente dispara a violação de FK (23503).
+        """
+        from uuid import uuid4
+
+        missing_type_id = db_connection.execute(
+            text("SELECT COALESCE(MAX(id), 0) + 999 FROM client_type")
+        ).scalar_one()
         with pytest.raises(IntegrityError) as error:
-            create_client(db_connection, client_type="OTHER")
-        assert error.value.orig.pgcode == "23514"
+            db_connection.execute(
+                text("""
+                    INSERT INTO client (
+                        client_key, client_type_id, email, timezone, status_id,
+                        created_at, updated_at
+                    )
+                    VALUES (
+                        :client_key, :client_type_id, :email, 'America/Sao_Paulo',
+                        (SELECT id FROM client_status WHERE enumerator = 'PENDING'),
+                        NOW(), NOW()
+                    )
+                """),
+                {
+                    "client_key": str(uuid4()),
+                    "client_type_id": missing_type_id,
+                    "email": f"{uuid4()}@example.test",
+                },
+            )
+        assert error.value.orig.pgcode == "23503"  # FK violation
 
     def test_email_cannot_be_reused(self, db_connection):
         """Dois clientes diferentes não podem compartilhar o mesmo e-mail."""
@@ -199,7 +236,10 @@ class TestClientStatusEventSchema:
     """Histórico auditável das mudanças de status de cliente."""
 
     def test_columns_and_primary_key(self, schema_engine):
-        """Evento inicial permite origem nula; destino e ator são obrigatórios."""
+        """Evento inicial permite origem nula; destino e ator são obrigatórios.
+
+        P1-D/COD-06: o ator é normalizado como FK `actor_type_id`.
+        """
         assert_columns_and_primary_key(
             schema_engine,
             "client_status_event",
@@ -208,7 +248,7 @@ class TestClientStatusEventSchema:
                 "client_id": ("bigint", None, "NO"),
                 "from_status_id": ("bigint", None, "YES"),
                 "to_status_id": ("bigint", None, "NO"),
-                "actor_type": ("character varying", 20, "NO"),
+                "actor_type_id": ("bigint", None, "NO"),
                 "reason": ("character varying", 500, "YES"),
                 "created_at": ("timestamp with time zone", None, "NO"),
             },
@@ -216,7 +256,7 @@ class TestClientStatusEventSchema:
         )
 
     def test_foreign_keys_are_restricted(self, schema_engine):
-        """Cliente e status referenciados não são apagados em cascata."""
+        """Cliente, status e ator referenciados não são apagados em cascata."""
         assert_foreign_keys(
             schema_engine,
             "client_status_event",
@@ -224,6 +264,7 @@ class TestClientStatusEventSchema:
                 ("client_id", "client", "id", "RESTRICT"),
                 ("from_status_id", "client_status", "id", "RESTRICT"),
                 ("to_status_id", "client_status", "id", "RESTRICT"),
+                ("actor_type_id", "actor_type", "id", "RESTRICT"),
             },
         )
 
@@ -251,25 +292,67 @@ class TestClientStatusEventSchema:
         assert event_id > 0
 
     def test_rejects_unknown_actor(self, db_connection):
-        """Atores fora de SYSTEM/INTERNAL não entram no histórico."""
+        """Atores fora da lookup não entram no histórico (FK, não CHECK).
+
+        P1-D/COD-06: `actor_type_id` inexistente dispara violação de FK (23503).
+        """
         client_id = create_client(db_connection, status="PENDING")
+        missing_actor_id = db_connection.execute(
+            text("SELECT COALESCE(MAX(id), 0) + 999 FROM actor_type")
+        ).scalar_one()
         with pytest.raises(IntegrityError) as error:
-            _insert_client_event(db_connection, client_id, actor_type="EXTERNAL")
-        assert error.value.orig.pgcode == "23514"
+            db_connection.execute(
+                text("""
+                    INSERT INTO client_status_event (
+                        client_id, from_status_id, to_status_id,
+                        actor_type_id, created_at
+                    )
+                    VALUES (
+                        :client_id, NULL,
+                        (SELECT id FROM client_status WHERE enumerator = 'PENDING'),
+                        :actor_type_id, NOW()
+                    )
+                """),
+                {"client_id": client_id, "actor_type_id": missing_actor_id},
+            )
+        assert error.value.orig.pgcode == "23503"  # FK violation
+
+
+class TestClientTypeLookupSchema:
+    """Tabela de lookup do tipo de cliente (P1-D/COD-06)."""
+
+    def test_expected_seeds(self, schema_engine):
+        """O bootstrap oferece exatamente INDIVIDUAL e COMPANY."""
+        with schema_engine.connect() as connection:
+            values = connection.execute(
+                text("SELECT enumerator FROM client_type")
+            ).scalars().all()
+        assert set(values) == {"INDIVIDUAL", "COMPANY"}
+
+    def test_columns_and_primary_key(self, schema_engine):
+        """A lookup tem ID BIGINT e enumerador único obrigatório."""
+        assert_columns_and_primary_key(
+            schema_engine,
+            "client_type",
+            {"id": ("bigint", None, "NO"), "enumerator": ("character varying", 20, "NO")},
+            ["id"],
+        )
+        assert_unique(schema_engine, "client_type", "enumerator")
 
 
 def _insert_client_event(connection, client_id, *, actor_type, from_status=None, to_status="PENDING"):
-    """Insere um evento usando os IDs dos status seed e devolve o ID criado."""
+    """Insere um evento resolvendo status e ator para seus IDs de lookup."""
     return connection.execute(
         text("""
             INSERT INTO client_status_event (
-                client_id, from_status_id, to_status_id, actor_type, created_at
+                client_id, from_status_id, to_status_id, actor_type_id, created_at
             )
             VALUES (
                 :client_id,
                 (SELECT id FROM client_status WHERE enumerator = :from_status),
                 (SELECT id FROM client_status WHERE enumerator = :to_status),
-                :actor_type, NOW()
+                (SELECT id FROM actor_type WHERE enumerator = :actor_type),
+                NOW()
             )
             RETURNING id
         """),

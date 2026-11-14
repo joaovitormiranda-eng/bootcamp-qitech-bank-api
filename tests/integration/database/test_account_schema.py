@@ -114,7 +114,10 @@ class TestAccountStatusEventSchema:
     """Histórico auditável das mudanças de status de conta."""
 
     def test_columns_and_primary_key(self, schema_engine):
-        """Evento inicial permite origem nula; destino e ator são obrigatórios."""
+        """Evento inicial permite origem nula; destino e ator são obrigatórios.
+
+        P1-D/COD-06: o ator é normalizado como FK `actor_type_id`.
+        """
         assert_columns_and_primary_key(
             schema_engine,
             "account_status_event",
@@ -123,7 +126,7 @@ class TestAccountStatusEventSchema:
                 "account_id": ("bigint", None, "NO"),
                 "from_status_id": ("bigint", None, "YES"),
                 "to_status_id": ("bigint", None, "NO"),
-                "actor_type": ("character varying", 20, "NO"),
+                "actor_type_id": ("bigint", None, "NO"),
                 "reason": ("character varying", 500, "YES"),
                 "created_at": ("timestamp with time zone", None, "NO"),
             },
@@ -131,7 +134,7 @@ class TestAccountStatusEventSchema:
         )
 
     def test_foreign_keys_are_restricted(self, schema_engine):
-        """Conta e status referenciados não são apagados em cascata."""
+        """Conta, status e ator referenciados não são apagados em cascata."""
         assert_foreign_keys(
             schema_engine,
             "account_status_event",
@@ -139,6 +142,7 @@ class TestAccountStatusEventSchema:
                 ("account_id", "account", "id", "RESTRICT"),
                 ("from_status_id", "account_status", "id", "RESTRICT"),
                 ("to_status_id", "account_status", "id", "RESTRICT"),
+                ("actor_type_id", "actor_type", "id", "RESTRICT"),
             },
         )
 
@@ -170,25 +174,45 @@ class TestAccountStatusEventSchema:
         assert event_id > 0
 
     def test_rejects_unknown_actor(self, db_connection):
-        """Atores fora de SYSTEM/INTERNAL não entram no histórico."""
+        """Atores fora da lookup não entram no histórico (FK, não CHECK).
+
+        P1-D/COD-06: `actor_type_id` inexistente dispara violação de FK (23503).
+        """
         account_id = create_account(db_connection)
+        missing_actor_id = db_connection.execute(
+            text("SELECT COALESCE(MAX(id), 0) + 999 FROM actor_type")
+        ).scalar_one()
         with pytest.raises(IntegrityError) as error:
-            _insert_account_event(db_connection, account_id, actor_type="EXTERNAL")
-        assert error.value.orig.pgcode == "23514"
+            db_connection.execute(
+                text("""
+                    INSERT INTO account_status_event (
+                        account_id, from_status_id, to_status_id,
+                        actor_type_id, created_at
+                    )
+                    VALUES (
+                        :account_id, NULL,
+                        (SELECT id FROM account_status WHERE enumerator = 'ACTIVE'),
+                        :actor_type_id, NOW()
+                    )
+                """),
+                {"account_id": account_id, "actor_type_id": missing_actor_id},
+            )
+        assert error.value.orig.pgcode == "23503"  # FK violation
 
 
 def _insert_account_event(connection, account_id, *, actor_type, from_status=None, to_status="ACTIVE"):
-    """Insere um evento usando os IDs dos status seed e devolve o ID criado."""
+    """Insere um evento resolvendo status e ator para seus IDs de lookup."""
     return connection.execute(
         text("""
             INSERT INTO account_status_event (
-                account_id, from_status_id, to_status_id, actor_type, created_at
+                account_id, from_status_id, to_status_id, actor_type_id, created_at
             )
             VALUES (
                 :account_id,
                 (SELECT id FROM account_status WHERE enumerator = :from_status),
                 (SELECT id FROM account_status WHERE enumerator = :to_status),
-                :actor_type, NOW()
+                (SELECT id FROM actor_type WHERE enumerator = :actor_type),
+                NOW()
             )
             RETURNING id
         """),

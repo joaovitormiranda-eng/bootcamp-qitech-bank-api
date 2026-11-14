@@ -6,16 +6,23 @@ from sqlalchemy import text
 
 
 def create_client(connection, *, status="ACTIVE", client_type="INDIVIDUAL", email=None):
-    """Insere um cliente válido e devolve o ID; `email` permite testar UNIQUE."""
+    """Insere um cliente válido e devolve o ID; `email` permite testar UNIQUE.
+
+    `client_type` é resolvido para a FK `client_type_id` via a lookup
+    `client_type`; um valor fora do domínio não encontra lookup e dispara a
+    violação de FK (23503), que os testes de contrato verificam.
+    """
     client_key = str(uuid4())
     return connection.execute(
         text("""
             INSERT INTO client (
-                client_key, client_type, email, timezone, status_id,
+                client_key, client_type_id, email, timezone, status_id,
                 created_at, updated_at
             )
             VALUES (
-                :client_key, :client_type, :email, 'America/Sao_Paulo',
+                :client_key,
+                (SELECT id FROM client_type WHERE enumerator = :client_type),
+                :email, 'America/Sao_Paulo',
                 (SELECT id FROM client_status WHERE enumerator = :status),
                 NOW(), NOW()
             )
@@ -51,16 +58,20 @@ def create_account(connection, *, client_id=None):
 
 
 def create_transaction(connection, *, transaction_type="DEPOSIT", request_control_key=None):
-    """Insere uma operação válida, com chave de controle opcional para colisões."""
+    """Insere uma operação válida, com chave de controle opcional para colisões.
+
+    `transaction_type` é resolvido para a FK `transaction_type_id`.
+    """
     return connection.execute(
         text("""
             INSERT INTO financial_transaction (
                 transaction_key, request_control_key, request_hash,
-                transaction_type, created_at
+                transaction_type_id, created_at
             )
             VALUES (
                 :transaction_key, :request_control_key, :request_hash,
-                :transaction_type, NOW()
+                (SELECT id FROM transaction_type WHERE enumerator = :transaction_type),
+                NOW()
             )
             RETURNING id
         """),
@@ -83,20 +94,27 @@ def insert_entry(
     amount_cents=1,
     balance_after_cents=1,
 ):
-    """Insere um lançamento com valores padrão válidos e devolve seu ID."""
+    """Insere um lançamento com valores padrão válidos e devolve seu ID.
+
+    `direction` e `entry_type` são resolvidos para as FKs `direction_id` e
+    `entry_type_id`; `entry_key` recebe um UUID público próprio.
+    """
     return connection.execute(
         text("""
             INSERT INTO transaction_entry (
-                transaction_id, account_id, direction, entry_type,
+                entry_key, transaction_id, account_id, direction_id, entry_type_id,
                 amount_cents, balance_after_cents, created_at
             )
             VALUES (
-                :transaction_id, :account_id, :direction, :entry_type,
+                :entry_key, :transaction_id, :account_id,
+                (SELECT id FROM transaction_direction WHERE enumerator = :direction),
+                (SELECT id FROM entry_type WHERE enumerator = :entry_type),
                 :amount_cents, :balance_after_cents, NOW()
             )
             RETURNING id
         """),
         {
+            "entry_key": str(uuid4()),
             "transaction_id": transaction_id,
             "account_id": account_id,
             "direction": direction,
