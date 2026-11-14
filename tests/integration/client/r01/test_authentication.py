@@ -46,6 +46,26 @@ class TestCreateClient:
         assert response.response_status == 403
         assert response.response_json["code"] == "QIT000002"
 
+    def test_rejects_non_ascii_internal_token(
+        self, individual_payload: dict[str, str]
+    ) -> None:
+        """Token inválido com caractere não ASCII -> 403, nunca 500 (SEC-01).
+
+        O Starlette decodifica headers HTTP em Latin-1, então um header como
+        "tÿ" vira uma str não ASCII. A comparação em tempo constante precisa
+        reprovar esse valor com o mesmo contrato (403 / QIT000002), sem deixar
+        vazar um TypeError que viraria 500.
+        """
+        response = ClientRequisition.send(
+            "POST",
+            "/client",
+            payload=individual_payload,
+            headers={"INTERNAL-TOKEN": f"{INTERNAL_TOKEN}-inv\u00ff"},
+        )
+
+        assert response.response_status == 403
+        assert response.response_json["code"] == "QIT000002"
+
     def test_rejects_near_miss_internal_token(
         self, individual_payload: dict[str, str]
     ) -> None:

@@ -50,8 +50,18 @@ def _tokens_match(provided: str | None, expected: str | None) -> bool:
     chegar ao compare_digest. Isso evita o TypeError de comparar com None e
     garante que um header vazio jamais seja aceito, mesmo que o token
     configurado também estivesse vazio.
+
+    A comparação roda sobre bytes, não str: compare_digest recusa strings
+    com caracteres não ASCII, e o Starlette decodifica headers HTTP em
+    Latin-1, então um header inválido como "tÿ" explodiria com TypeError e
+    viraria um 500 em vez do 403 esperado. Codificamos os dois lados com o
+    mesmo Latin-1: ele faz round-trip de qualquer byte decodificado de um
+    header e nunca levanta UnicodeEncodeError, mantendo a comparação em
+    tempo constante e consistente.
     """
     if not provided or not expected:
         return False
 
-    return hmac.compare_digest(provided, expected)
+    return hmac.compare_digest(
+        provided.encode("latin-1"), expected.encode("latin-1")
+    )
