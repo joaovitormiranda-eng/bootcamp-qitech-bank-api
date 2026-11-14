@@ -15,7 +15,7 @@ Esta auditoria não altera código de produção, testes, SQL, migrações, depe
 
 A Bank API é um MVP acadêmico de BaaS com um modelo de confiança explícito na RFC v2.1: **uma plataforma parceira por implantação**, chamador interno confiável, autenticação por um **segredo compartilhado** no header `INTERNAL-TOKEN`, sem autenticação por usuário final e sem multi-tenancy. Lido sob esse modelo, o código tem postura de segurança **boa para o escopo declarado**: não há SQL dinâmico (tudo via ORM parametrizado), os connectors têm timeout obrigatório, os logs são estruturados com allowlist de campos (sem PII/segredo), o reset destrutivo de schema é guardado por sufixo `_test`, a imagem roda como usuário sem privilégio, o `.gitignore`/`.dockerignore` barram segredos e dados, e a concorrência financeira usa locks pessimistas ordenados com commit único.
 
-Nenhum segredo real foi encontrado em arquivos versionados nem no histórico Git acessível: todos os valores de token são o placeholder demonstrativo `default_token`. **O relatório é seguro para publicação como PR documental.**
+Dentro do escopo de uma varredura manual sobre os arquivos versionados e o histórico Git acessível, nenhum segredo real foi encontrado: todos os valores de token são o placeholder demonstrativo `default_token`. Essa varredura manual não substitui scanners dedicados (Gitleaks/TruffleHog, indisponíveis nesta sessão) nem cobre integralmente recursos externos e configurações privadas do repositório (proteção de branch, Dependabot, secret scanning, segredos de Actions; ver §7). Sob essa ressalva de cobertura, **o relatório é seguro para publicação como PR documental.**
 
 Os achados materiais são de severidade **média para baixo**, todos coerentes com o que a P1 já havia sinalizado para a P2:
 
@@ -23,8 +23,8 @@ Os achados materiais são de severidade **média para baixo**, todos coerentes c
 |---|---|---|
 | Crítica | 0 | nenhum |
 | Alta | 0 | nenhum |
-| Média | 3 | SEC-01 (comparação de token não constante), SEC-02 (`requests` com CVEs conhecidas), SEC-05 (documentação interativa `/docs`,`/redoc`,`/openapi.json` habilitada) |
-| Baixa | 4 | SEC-03 (dependências de dev vulneráveis), SEC-04 (sem rate limiting / anti-brute-force), SEC-06 (`/` expõe PID do processo), SEC-07 (sem bound superior em `page` do extrato) |
+| Média | 2 | SEC-01 (comparação de token não constante), SEC-02 (`requests` com CVEs conhecidas) |
+| Baixa | 5 | SEC-03 (dependências de dev vulneráveis), SEC-04 (sem rate limiting / anti-brute-force), SEC-05 (divergência comentário↔config em `/docs`,`/redoc`,`/openapi.json`, acesso atrás do token), SEC-06 (`/` expõe PID do processo), SEC-07 (sem bound superior em `page` do extrato) |
 | Informativa | 5 | SEC-08 a SEC-12 (hardening de CI, pinning por SHA, proteção de branch não verificável, ausência de TLS/segregação de usuário de banco no MVP, falta de token interno no connector de análise) |
 
 Ferramentas que **rodaram de verdade**: `bandit` (0 achados), `pip-audit` (achados reais com advisories verificáveis), `semgrep` com **regras locais** (confirmou SEC-01). Ferramentas **indisponíveis**: gitleaks, trivy, trufflehog (binários Go, não instaláveis), e o ruleset remoto do semgrep (`semgrep.dev` bloqueado pelo proxy, HTTP 403). O sweep de segredos foi feito manualmente e está marcado como tal.
@@ -98,7 +98,7 @@ A única fronteira de autenticação é o middleware `internal_token`. Tudo que 
 - **API4 Resource Consumption:** SEC-04/SEC-07.
 - **API7 SSRF:** URLs de integração vêm do ambiente, não de entrada do usuário; sem SSRF controlável pelo cliente (ver §5).
 - **API8 Security Misconfiguration:** SEC-05, SEC-08..SEC-10.
-- **API9 Inventory:** `/openapi.json` e `/docs` habilitados divergem do comentário do código (SEC-05).
+- **API9 Inventory:** `/openapi.json` e `/docs` habilitados divergem do comentário do código (SEC-05); o acesso permanece atrás do `INTERNAL-TOKEN`, sem exposição pública não autenticada.
 
 ---
 
@@ -163,18 +163,18 @@ Esquema por achado: ID · Categoria · Severidade · Arquivo:linha · Evidência
 - **Risco de regressão:** médio se implementado em código (pode afetar testes de concorrência); baixo se tratado na borda.
 - **Teste de comprovação:** teste negativo de N tentativas → bloqueio/alerta, sem quebrar R01–R10.
 
-### SEC-05 - Documentação interativa e OpenAPI habilitadas (divergência de configuração)
+### SEC-05 - Documentação interativa e OpenAPI habilitadas (divergência comentário↔configuração)
 - **Categoria:** Security Misconfiguration / Improper Inventory Management (OWASP API8/API9).
-- **Severidade:** Média (exposição de superfície e de inventário).
+- **Severidade:** Baixa (acesso atrás do token no modelo single-tenant; o ponto material é a divergência comentário↔configuração, não exposição pública).
 - **Local:** `src/app.py` (`docs_url="/docs"`, `redoc_url="/redoc"`, `openapi_url="/openapi.json"`).
-- **Evidência:** o comentário imediatamente acima afirma “Os três None desligam a documentação automática… aqui elas não existem”, mas os três parâmetros estão **habilitados**. Como não há BYPASS para esses caminhos, eles exigem token; ainda assim o inventário de rotas fica acessível a qualquer portador do token e o comentário induz a conclusão errada em auditoria.
-- **Cenário:** exposição não intencional do mapa de endpoints/esquemas.
-- **Condições de exploração:** acesso autenticado (ou público, caso alguma infra à frente libere `/docs`).
-- **Impacto:** facilita reconhecimento; baixo valor ofensivo direto.
-- **Probabilidade/Confiança:** **alta** (observável no código); a divergência comentário↔código é o ponto principal.
-- **Mitigação:** decidir deliberadamente: desligar em produção (`docs_url=None, redoc_url=None, openapi_url=None`) por `APP_ENV`, ou manter e corrigir o comentário. Não é cosmético: alinha configuração, comentário e intenção.
+- **Evidência:** o comentário imediatamente acima afirma “Os três None desligam a documentação automática… aqui elas não existem”, mas os três parâmetros estão **habilitados**. Como não há BYPASS para esses caminhos, eles **exigem o `INTERNAL-TOKEN`** pela mesma porta de autenticação de R01–R09: não há exposição pública não autenticada. O resíduo real é que o comentário descreve o oposto da configuração, induzindo conclusão errada em auditoria, e que o inventário de rotas fica acessível a qualquer portador do token.
+- **Cenário:** reconhecimento do mapa de endpoints/esquemas por um chamador que já possui o token.
+- **Condições de exploração:** acesso **autenticado** (requer o token). Exposição pública só ocorreria se alguma infra à frente liberasse `/docs` sem token, o que está fora do repositório.
+- **Impacto:** baixo. No modelo de confiança da RFC o portador do token já é a plataforma parceira confiável; o inventário acrescenta pouco valor ofensivo.
+- **Probabilidade/Confiança:** **alta** de que os parâmetros estão habilitados e de que o comentário diverge; **baixa** de exposição não autenticada no escopo do repositório.
+- **Mitigação:** corrigir a divergência comentário↔configuração (prioritário). Opcionalmente, desligar `/docs`/`/redoc`/`/openapi.json` em produção por `APP_ENV` como defesa em profundidade; não é mandatório dado que o acesso já é token-gated. Alinhar configuração, comentário e intenção.
 - **Risco de regressão:** baixo; nenhuma rota de negócio depende de `/docs`.
-- **Teste de comprovação:** teste que `/openapi.json` responde o esperado conforme `APP_ENV` (404 em prod se desligado).
+- **Teste de comprovação:** confirmar que `/openapi.json` exige token (403 sem token) e, caso se opte por desligar por ambiente, que responde conforme `APP_ENV`.
 
 ### SEC-06 - `GET /` expõe o PID do processo
 - **Categoria:** Information Disclosure.
@@ -198,9 +198,9 @@ Esquema por achado: ID · Categoria · Severidade · Arquivo:linha · Evidência
 - **Condições de exploração:** chamador autenticado; mitigado em parte por `statement_timeout`.
 - **Impacto:** custo de query elevado; limitado pelo timeout de statement.
 - **Probabilidade/Confiança:** média de existência; impacto baixo dado o timeout.
-- **Mitigação:** limitar `page` por regex/validação ou adotar keyset pagination (preservar semântica e ordenação determinística do extrato, invariante §11).
-- **Risco de regressão:** médio se mudar a semântica de paginação; baixo se só adicionar teto.
-- **Teste de comprovação:** R08 paginação continua verde; novo teste de `page` fora do teto → 400.
+- **Mitigação (compatível com o contrato):** reduzir o custo da paginação profunda **sem** rejeitar entradas válidas. Uma página além do fim do extrato deve continuar respondendo **HTTP 200 com lista vazia** (RFC v2.1; invariante §11 “Semântica e paginação determinística do extrato (R08)”). Opções: adotar keyset/seek pagination para evitar o custo de `OFFSET` profundo preservando a ordenação determinística; apoiar-se no `statement_timeout` já existente como teto de custo; limitar o **custo** da consulta em vez de recusar a entrada. A limitação de custo do `OFFSET` profundo pode ser registrada como resíduo aceito enquanto o keyset não for adotado. **Não** introduzir teto de `page` que gere HTTP 400 para páginas válidas, pois isso quebraria o contrato de 200+lista vazia.
+- **Risco de regressão:** médio se mudar a semântica de paginação; por isso a mitigação preserva explicitamente 200+lista vazia e a ordenação.
+- **Teste de comprovação:** R08 paginação continua verde, incluindo o caso de `page` além do fim retornando **200 com lista vazia**; eventual teste de keyset mantém a ordenação determinística.
 
 ### SEC-08 - CI: ausência de `permissions` explícitas para o `GITHUB_TOKEN`
 - **Categoria:** CI/CD Security.
@@ -257,18 +257,21 @@ Issues by severity:  Undefined 0 · Low 0 · Medium 0 · High 0
 Zero achados, inclusive em severidade/confiança baixas. Consistente com a ausência de `eval`/`exec`, de SQL por concatenação e de uso inseguro de `subprocess`/`pickle`.
 
 ### 6.2 pip-audit (dependências): executado
-Produção (`requirements.txt`): **4 ocorrências em 1 pacote** (`requests 2.32.3`).
+Nota sobre contagem: o `pip-audit` emite uma linha por par (pacote, advisory) e, quando um mesmo pacote é resolvido por mais de um caminho (pin direto e inclusão via `-r requirements.txt`), a mesma advisory pode aparecer repetida. Por isso distinguimos **ocorrências** (linhas emitidas) de **advisories distintas** e de **pacotes afetados**.
+
+Produção (`requirements.txt`): **1 pacote afetado** (`requests 2.32.3`), **2 advisories distintas**, correspondendo a **4 ocorrências** no relatório bruto (cada advisory listada por aparecer tanto no pin direto quanto na resolução transitiva do mesmo arquivo). As advisories distintas:
 
 | Pacote | Versão | Advisory | Aliases | Fix |
 |---|---|---|---|---|
 | requests | 2.32.3 | PYSEC-2026-1872 | GHSA-9hjg-9r4m-mvj7, CVE-2024-47081 | 2.32.4 |
 | requests | 2.32.3 | PYSEC-2026-2275 | GHSA-gc5v-m9x4-r6x2, CVE-2026-25645 | 2.33.0 |
 
-Desenvolvimento (`requirements-dev.txt`): **8 ocorrências em 3 pacotes**.
+Desenvolvimento (`requirements-dev.txt`): **3 pacotes afetados**, **4 advisories distintas**, correspondendo a **8 ocorrências** no relatório bruto (o `requests` entra via `-r requirements.txt` e suas 2 advisories são contadas em ambos os caminhos de resolução; `pytest` e `python-dotenv` contribuem com 1 advisory cada). As advisories distintas por pacote:
 
 | Pacote | Versão | Advisory | Aliases | Fix |
 |---|---|---|---|---|
-| requests | 2.32.3 | PYSEC-2026-1872 / PYSEC-2026-2275 | (acima) | 2.32.4 / 2.33.0 |
+| requests | 2.32.3 | PYSEC-2026-1872 | GHSA-9hjg-9r4m-mvj7, CVE-2024-47081 | 2.32.4 |
+| requests | 2.32.3 | PYSEC-2026-2275 | GHSA-gc5v-m9x4-r6x2, CVE-2026-25645 | 2.33.0 |
 | pytest | 7.4.4 | PYSEC-2026-1845 | GHSA-6w46-j5rx-g56g, CVE-2025-71176 | 9.0.3 |
 | python-dotenv | 1.0.1 | PYSEC-2026-2270 | GHSA-mf9w-mj56-hr94, CVE-2026-28684 | 1.2.2 |
 
@@ -289,7 +292,7 @@ gitleaks/trufflehog/trivy não instaláveis (binários Go). Varredura manual:
 - `git ls-files` por extensões sensíveis (`.env`, `.pem`, `.key`, `.p12`, `.csv`, `.dump`, `.sqlite`…): **nenhum** arquivo desse tipo versionado.
 - `.gitignore` e `.dockerignore` barram explicitamente `.env*` (exceto `.env.example`), chaves, dumps e dados; `.dockerignore` exclui `.git`, `.github` e `.env*` da imagem.
 
-**Classificação:** `default_token` e `bootcamp:bootcamp` são **demonstrativos** (documentados como “somente ambiente local” no README e no `.env.example`, e injetados por variável de ambiente no Compose). **Nenhuma credencial potencialmente real foi encontrada.**
+**Classificação:** `default_token` e `bootcamp:bootcamp` são **demonstrativos** (documentados como “somente ambiente local” no README e no `.env.example`, e injetados por variável de ambiente no Compose). **Nenhuma credencial potencialmente real foi encontrada dentro do escopo desta varredura manual** sobre os arquivos versionados e o histórico Git acessível. Essa varredura manual **não substitui** scanners dedicados (Gitleaks/TruffleHog, indisponíveis por serem binários Go não instaláveis) e **não cobre integralmente** recursos externos nem configurações privadas do repositório (proteção de branch, Dependabot, secret scanning, push protection, segredos de Actions), listadas como “não verificáveis” na §7. A conclusão de ausência de segredos deve ser lida com essa limitação de cobertura.
 
 ---
 
@@ -313,11 +316,11 @@ gitleaks/trufflehog/trivy não instaláveis (binários Go). Varredura manual:
 |---|---|---|---|---|---|
 | SEC-01 | Timing side-channel no token | Média | Baixa | `hmac.compare_digest` (P2-A-PR-1) | Corrigir |
 | SEC-02 | CVEs em `requests` (prod) | Média | Baixa | bump `>=2.33.0` (P2-A-PR-2) | Corrigir |
-| SEC-05 | `/docs`/OpenAPI + comentário divergente | Média | Alta (exposição) | desligar por ambiente ou corrigir comentário (P2-A-PR-3) | Corrigir |
 | SEC-03 | CVEs em deps de dev | Baixa | Baixa | bump controlado (`pytest` major → cautela) | Corrigir com cautela |
 | SEC-04 | Sem rate limit | Baixa | Média | throttling na borda/infra | Aceitar na borda (residual) |
+| SEC-05 | Comentário↔config divergente em `/docs`/OpenAPI (acesso token-gated) | Baixa | Baixa (sem exposição pública) | corrigir comentário; opcionalmente desligar por ambiente (P2-A-PR-3) | Corrigir |
 | SEC-06 | PID em `/` | Baixa | Baixa | remover PID (P2-A-PR-3) | Corrigir |
-| SEC-07 | `page` sem teto | Baixa | Média | teto de `page`/keyset | Corrigir |
+| SEC-07 | `page` sem teto | Baixa | Média | keyset/seek e `statement_timeout` (preservar 200+lista vazia) | Corrigir |
 | SEC-08..10 | Hardening de CI | Informativa | n/a | `permissions`, pin por SHA, retenção de artefato | Hardening P2-A-PR-4 |
 | SEC-11 | Usuário de banco com DDL / sem TLS | Informativa | n/a | usuário DML + `sslmode` em produção | Aceitar no MVP, documentar |
 | SEC-12 | Connector de análise sem token | Informativa | n/a | parametrizar quando houver provedor real | Aceitar no MVP |
@@ -331,10 +334,10 @@ gitleaks/trufflehog/trivy não instaláveis (binários Go). Varredura manual:
 Ordem por prioridade da §10 do briefing (segredos/críticos → correções simples de baixo risco → dependências → hardening de CI → testes/observabilidade → residuais aceitos).
 
 1. **Segredos reais / críticos:** nenhum. (Sweep limpo.)
-2. **Correções simples de baixo risco:** SEC-01 (`compare_digest`), SEC-06 (remover PID), SEC-05 (alinhar `/docs`/comentário), SEC-07 (teto de `page`).
+2. **Correções simples de baixo risco:** SEC-01 (`compare_digest`), SEC-06 (remover PID), SEC-05 (corrigir comentário↔config; opcional desligar por ambiente), SEC-07 (reduzir custo via keyset/`statement_timeout`, preservando 200+lista vazia).
 3. **Dependências:** SEC-02 (`requests>=2.33.0`), depois SEC-03 (dev-deps; `pytest` major com validação integral).
 4. **Hardening de CI:** SEC-08 (`permissions`), SEC-09 (pin por SHA), SEC-10 (retenção de artefato).
-5. **Testes negativos/observabilidade:** teste de brute-force/rate (SEC-04), testes de `page` fora do teto (SEC-07), teste de configuração de `/docs` por ambiente (SEC-05).
+5. **Testes negativos/observabilidade:** teste de brute-force/rate (SEC-04), teste de `page` além do fim retornando 200+lista vazia e de ordenação determinística do extrato (SEC-07), teste de que `/docs`/`/openapi.json` exigem token e, se desligados, respeitam o ambiente (SEC-05).
 6. **Residuais aceitos:** SEC-04 (borda), SEC-11, SEC-12, e a premissa single-tenant, documentados e revalidáveis se o produto evoluir.
 
 ---
@@ -357,11 +360,11 @@ Cada PR é pequeno, independente e respeita os invariantes da §11. Nenhum é in
 - **Testes obrigatórios:** suíte completa; foco em R03 (connectors).
 - **Critérios:** `pip-audit -r requirements.txt` sem achados para `requests`; CI verde.
 
-### P2-A-PR-3 - Reduzir exposição de superfície (SEC-05, SEC-06)
-- **Escopo:** decidir `/docs`/`/redoc`/`/openapi.json` por `APP_ENV` (ou corrigir o comentário se mantidos); remover PID de `GET /`.
+### P2-A-PR-3 - Alinhar comentário↔config e reduzir info disclosure (SEC-05, SEC-06)
+- **Escopo:** corrigir o comentário divergente sobre `/docs`/`/redoc`/`/openapi.json` em `src/app.py` (prioritário); opcionalmente desligá-los por `APP_ENV` como defesa em profundidade, sem obrigatoriedade dado que já estão atrás do token; remover PID de `GET /`.
 - **Arquivos:** `src/app.py`, `src/resources/health_check.py`.
-- **Justificativa:** alinhar configuração à intenção documentada; reduzir info disclosure.
-- **Testes obrigatórios:** contrato de `/` e `/health_check`; teste de `/openapi.json` conforme ambiente.
+- **Justificativa:** alinhar configuração, comentário e intenção; reduzir info disclosure.
+- **Testes obrigatórios:** contrato de `/` e `/health_check`; teste de que `/openapi.json` exige token e, se desligado por ambiente, responde conforme `APP_ENV`.
 - **Critérios:** CI verde; contratos atualizados coerentes com a RFC/ROTAS.
 
 ### P2-A-PR-4 - Hardening de CI (SEC-08, SEC-09, SEC-10)
@@ -371,12 +374,12 @@ Cada PR é pequeno, independente e respeita os invariantes da §11. Nenhum é in
 - **Testes obrigatórios:** re-execução do workflow (jobs `test` e `migration`).
 - **Critérios:** CI verde sem alteração de comportamento da suíte.
 
-### P2-A-PR-5 - Deps de dev e teto de `page` (SEC-03, SEC-07)
-- **Escopo:** bump `python-dotenv>=1.2.2`; avaliar `pytest` 9.x em PR isolado (major); teto/validação de `page` no extrato preservando semântica e ordenação.
-- **Arquivos:** `requirements-dev.txt`, `src/schemas/get_account_transactions.json` (+ teste).
-- **Justificativa:** fechar CVEs de dev e limitar consumo de recursos no extrato.
-- **Testes obrigatórios:** R08 paginação; `pip-audit -r requirements-dev.txt` limpo.
-- **Critérios:** 544 verdes; novo teste de `page` fora do teto → 400; sem regressão de paginação.
+### P2-A-PR-5 - Deps de dev e custo de paginação do extrato (SEC-03, SEC-07)
+- **Escopo:** bump `python-dotenv>=1.2.2`; avaliar `pytest` 9.x em PR isolado (major); reduzir o custo da paginação profunda do extrato via keyset/seek e/ou apoio no `statement_timeout`, **preservando** o contrato de que `page` além do fim retorna HTTP 200 com lista vazia e a ordenação determinística. Sem teto de `page` que gere HTTP 400 para entradas válidas.
+- **Arquivos:** `requirements-dev.txt`, `src/controllers/transaction_controller.py` e/ou `src/schemas/get_account_transactions.json` (+ teste).
+- **Justificativa:** fechar CVEs de dev e reduzir consumo de recursos no extrato sem quebrar o contrato da RFC v2.1.
+- **Testes obrigatórios:** R08 paginação, incluindo `page` além do fim → 200 com lista vazia; `pip-audit -r requirements-dev.txt` limpo.
+- **Critérios:** 544 verdes; `page` além do fim continua retornando 200+lista vazia; ordenação determinística preservada; sem regressão de paginação.
 
 > **Observação de merge:** sem merge automático. SEC-01, SEC-02, SEC-03, SEC-05, SEC-06, SEC-07 e os ajustes de CI tocam código/deps/workflows e **não** fazem parte desta rodada de auditoria.
 
@@ -398,7 +401,7 @@ Cada PR é pequeno, independente e respeita os invariantes da §11. Nenhum é in
 **Critérios de encerramento da P2-A (esta rodada):**
 - [x] Auditoria concluída sem alterar código/testes/SQL/migrações/deps/Docker/workflows/GitHub.
 - [x] Único artefato: `docs/P2A-SECURITY-AUDIT.md`.
-- [x] Sweep de segredos (árvore + histórico) executado; nenhum segredo real; relatório seguro para publicação.
+- [x] Sweep manual de segredos (árvore + histórico) executado; nenhum segredo real dentro do escopo dessa varredura manual, que não substitui Gitleaks/TruffleHog nem cobre integralmente recursos externos e configurações privadas (ver §7); relatório seguro para publicação sob essa ressalva.
 - [x] Ferramentas reais executadas (bandit, pip-audit, semgrep local) e limitações documentadas.
 - [x] Achados classificados, revisados em segunda passada e separados de escolhas legítimas de MVP.
 - [ ] Remediação **não** iniciada (reservada para rodadas P2-A-PR-*).
