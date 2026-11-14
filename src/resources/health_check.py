@@ -1,5 +1,3 @@
-import os
-
 from fastapi import Response, status
 from fastapi.responses import JSONResponse
 
@@ -10,7 +8,12 @@ class HealthCheckResource:
     """As duas rotas que respondem sem token: quem é este serviço, e se ele está vivo."""
 
     def on_get_home(self) -> JSONResponse:
-        home = {"service": SERVICE_NAME, "id": str(os.getpid())}
+        # A raiz é pública (sem INTERNAL-TOKEN) e serve só para dizer QUEM
+        # é este serviço. Não expõe detalhe de runtime: o PID do processo
+        # (os.getpid()) foi removido por ser informação interna sem valor
+        # para o chamador e desnecessária na superfície pública (SEC-06 da
+        # auditoria P2-A). Nenhum contrato/consumidor depende do campo "id".
+        home = {"service": SERVICE_NAME}
 
         return JSONResponse(content=home, status_code=status.HTTP_200_OK)
 
