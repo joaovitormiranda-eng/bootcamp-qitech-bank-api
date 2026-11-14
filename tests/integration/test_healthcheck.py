@@ -25,6 +25,21 @@ class TestHealthCheck:
         response = ClientRequisition.send("GET", "/")
         assert response.response_status == 200
 
+    def test_home_identifies_the_service_without_leaking_the_pid(self):
+        """SEC-06: a raiz pública diz QUEM é o serviço e nada de runtime.
+
+        O corpo tem apenas ``service``; o antigo campo ``id`` (PID do
+        processo via os.getpid()) foi removido por ser detalhe interno sem
+        valor para o chamador na superfície pública não autenticada.
+        """
+        response = ClientRequisition.send("GET", "/")
+
+        assert response.response_status == 200
+        body = response.response_json
+        assert "service" in body
+        assert body["service"]
+        assert "id" not in body
+
     def test_health_check(self):
         response = ClientRequisition.send("GET", "/health_check")
         assert response.response_status == 204
