@@ -15,6 +15,15 @@ on:
       - main
   workflow_dispatch:
 
+# Permissão mínima para o GITHUB_TOKEN (SEC-08 da auditoria P2-A). Ambos os
+# jobs apenas fazem checkout e rodam a suíte/migração: nenhum escreve no
+# repositório, cria release ou comenta em PR. `contents: read` é suficiente —
+# o upload de artefato usa o runtime de Actions, não a permissão `contents`.
+# Declarar explicitamente torna a postura resistente a mudança do default do
+# repositório. Jobs podem estreitar ainda mais, mas nenhum precisa de mais.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -90,11 +99,15 @@ jobs:
       APP_ENV: test
 
     steps:
+      # Actions oficiais pinadas por SHA de commit completo (SEC-09): uma tag
+      # como @v4 é mutável e pode ser reapontada; o SHA é imutável e torna o
+      # build reproduzível. O comentário ao lado registra a versão legível
+      # correspondente ao SHA, conforme recomendação de hardening do GitHub.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
 
@@ -195,13 +208,20 @@ jobs:
 
       - name: Upload pytest results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pytest-results
           path: |
             pytest-results.xml
             api.log
           if-no-files-found: ignore
+          # Retenção curta do artefato (SEC-10). O risco de PII em api.log já é
+          # baixo — o logger usa allowlist estruturada e test_observability.py
+          # assere ausência de CPF/CNPJ/e-mail/segredo/INTERNAL_TOKEN nos logs,
+          # e os dados do CI são sintéticos. Limitar a retenção reduz ainda mais
+          # a janela de exposição do log/relatório, sem perder a utilidade de
+          # depuração logo após a execução.
+          retention-days: 7
 
   # Job ISOLADO de validação da migração de schema POPULADO (P1-D/COD-05/COD-06).
   # NÃO substitui nem altera o job `test` (obrigatório para a main protegida):
@@ -232,8 +252,9 @@ jobs:
       MIG_URL: postgresql://bootcamp:bootcamp@127.0.0.1:5434/bootcamp_migration_test
 
     steps:
+      # Mesma pinagem por SHA do job `test` (SEC-09).
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Wait for PostgreSQL
         run: |
