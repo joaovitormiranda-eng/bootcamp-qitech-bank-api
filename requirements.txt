@@ -18,4 +18,13 @@ psycopg2-binary==2.9.10
 # O requests e com que este servico chama OUTROS servicos por HTTP.
 # So os connectors (src/connectors/) podem usa-lo — nenhuma chamada
 # externa fica solta no meio do codigo.
-requests==2.32.3
+# 2.33.0 corrige duas advisories conhecidas da 2.32.3, ambas reportadas
+# pelo pip-audit (SEC-02 da auditoria P2-A):
+#   - CVE-2024-47081 / PYSEC-2026-1872: vazamento de credenciais .netrc
+#     para terceiros em URLs maliciosas (fix base: 2.32.4);
+#   - CVE-2026-25645 / PYSEC-2026-2275: reuso inseguro de arquivo temporario
+#     em extract_zipped_paths() (fix: 2.33.0).
+# O projeto nao usa .netrc nem extract_zipped_paths(); a atualizacao e
+# higiene de supply-chain, com API estavel do requests (uso restrito a
+# src/connectors/rest_connector.py via requests.request com timeout).
+requests==2.33.0
