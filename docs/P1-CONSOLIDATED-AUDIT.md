@@ -53,23 +53,37 @@ Estado atual, confrontado com a baseline da banca:
   `544 passed in 26.52s`, 0 falhas / 0 erros / 0 skips, no run
   `43549391873` (commit `f57ca8f`). É a inversão direta do bloqueio que
   eliminou o projeto.
-- **COD-02, COD-05, COD-06, COD-07, COD-09, COD-11, COD-12, COD-13 -
+- **COD-02, COD-06, COD-07, COD-09, COD-11, COD-12, COD-13 -
   comprovadamente resolvidos** por mudança estrutural verificável no código/SQL
   **[INSPEÇÃO]** e atestados em verde pelo CI **[CI]**.
+- **COD-05 - parcialmente resolvido.** `transaction_entry` ganhou sua chave
+  pública `entry_key` e está **resolvida**; porém `individual_client` e
+  `company_client` **ainda divergem** da interpretação literal da régua
+  (mantêm `client_id` como PK/FK, sem `id` surrogado separado nem `*_key`
+  público). Por isso o critério fica **PARCIAL**, não integralmente resolvido:
+  é resolução por decisão de engenharia em uma tabela e divergência consciente
+  (documentada) nas duas especializações PF/PJ.
 - **COD-04, COD-08, COD-14 - parcialmente resolvidos.** Houve progresso real e
   honesto (conversão de testes para black-box, mínimo de SQL retido), mas a
   **fração exata por teste coletado** que a banca pontua só é mensurável
   rodando a stack viva. O repositório, com razão, **não reivindica
   conformidade total** nesses três; permanecem exceções legítimas e
   documentadas (unit de função pura, schema, concorrência, fault-injection).
+  Em COD-08 há um ponto adicional: a P1-C **acrescentou** testes novos que
+  importam módulos internos de `src` (os unit de fronteira de camada), de modo
+  que o critério não pode ser lido como uniformemente melhorado pela P1-B.
 - **COD-03, COD-10 - permaneciam "não verificáveis" para a banca**; aqui são
   reavaliados por inspeção como **majoritariamente atendidos**, mas a fração
   por teste continua CI/avaliador-dependente.
-- **ESC-01, RFC-01 - mantidos.** Escopo mínimo entregue; RFC fiel. Três das
-  quatro "omissões" observadas pela banca foram **neutralizadas** (rotas
-  `sample_entity` removidas e cobertas por teste; índices de
-  `transaction_entry` documentados). Duas pendências de documentação
-  permanecem (erros-base `QIT0000xx` e `BankSlipConnector` exportado).
+- **ESC-01, RFC-01 - mantidos.** Escopo mínimo entregue; RFC fiel. Das quatro
+  "omissões" observadas pela banca, o balanço honesto é **uma resolvida, uma
+  parcialmente documentada e duas pendentes**: (1) rotas `sample_entity`
+  removidas e cobertas por teste → **resolvida**; (2) índices
+  `idx_transaction_entry_account/transaction` citados em
+  `docs/P1D-DATABASE-AUDIT.md §1.10` mas **ainda ausentes do diagrama do
+  `docs/ERD.md`** → **parcialmente documentada**; (3) erros-base `QIT0000xx`
+  declarados e não citados na RFC → **pendente**; (4) `BankSlipConnector`
+  exportado embora boletos estejam fora de escopo → **pendente**.
 
 **Veredito de maior valor / menor risco:** a maior criação de valor já foi
 entregue (COD-01 verde). A próxima mudança de **maior valor e menor risco**
@@ -80,7 +94,7 @@ COD-04/08/14 convertendo alvos de baixo risco. Detalhes na seção 5 e 6.
 
 > **Ressalva honesta e central.** A separação [CI] × [EXEC-LOCAL] ×
 > [INSPEÇÃO] não é formalidade: o único ponto que **esta auditoria executou
-> de fato** foram os invariantes puros de tarifa (6 testes, seção 3.3).
+> de fato** foram os invariantes puros de tarifa (6 testes, seção 3.2).
 > Tudo o que depende de banco/HTTP é **[CI]** - herdado de um run verde que
 > confio porque reli o `ci.yml` e confirmei que o passo decisório é
 > `pytest -q -ra` sem `continue-on-error`, sem `--maxfail` e sem
@@ -172,9 +186,12 @@ integralmente resolvido.
   e `company_client` mantêm `client_id BIGINT PRIMARY KEY REFERENCES
   client(id)`. [CI] `tests/integration/database/test_financial_schema.py` e o
   job `migration` (backfill de `entry_key` único/total) verdes.
-- **Status:** **RESOLVIDO para `transaction_entry`; AUDITADO-E-PRESERVADO
-  para `individual_client`/`company_client`** (divergência consciente e
-  documentada da sugestão literal da régua).
+- **Status:** **PARCIAL.** **RESOLVIDO para `transaction_entry`** (ganhou
+  `entry_key` público); **divergente da régua literal para
+  `individual_client`/`company_client`**, que mantêm `client_id` PK/FK sem
+  `id` surrogado separado nem `*_key` público (divergência consciente e
+  documentada). Como duas das três tabelas não seguem a interpretação literal
+  da régua, o critério **não** é marcado como integralmente resolvido.
 - **Riscos:** se a banca exigir o padrão literal `id`+`*_key` nas tabelas de
   especialização, a divergência está documentada, mas **contará como não
   atendida pela régua literal**. É o principal ponto em que "resolvido por
@@ -207,20 +224,33 @@ integralmente resolvido.
 ### COD-08 - Testes não importam `src`
 - **Banca:** ❌ 104/110. 6 arquivos importam `src` (timeouts, observability,
   healthcheck:77-78, fee, hash).
-- **P0→P1-D (P1-B):** **nenhum teste novo** passou a importar `src`; o conjunto
-  que importa `src` permanece pequeno e **todo legítimo** (função pura +
-  observabilidade/timeout que exigem introspecção interna).
+- **P0→P1-D - resultado da P1-B ≠ mudança posterior da P1-C:** na **P1-B** o
+  conjunto que importava `src` foi mantido pequeno e justificado (função pura +
+  observabilidade/timeout que exigem introspecção interna), sem crescimento.
+  Porém a **P1-C acrescentou testes novos que importam módulos internos de
+  `src`**: `tests/unit/test_services_layer_boundary.py` (commit `b15972a`,
+  `test(p1c): add COD-09 services-boundary unit tests ...`) importa
+  `controllers.transaction_controller`, `services.transaction_hash` e
+  `services.transfer_fee`. Ou seja, o critério **não** melhorou de forma
+  uniforme: a P1-B conteve, a P1-C introduziu novos imports internos por
+  design (teste de fronteira de camada).
 - **Evidência:** [INSPEÇÃO] importam `src`: `tests/unit/test_transaction_fee.py`,
-  `test_transaction_hash.py`, `test_analysis_provider_initialization.py`,
-  `test_services_layer_boundary.py` (COD-09), `tests/integration/test_observability.py`,
+  `test_transaction_hash.py`, `test_transfer_fee_invariants.py`,
+  `test_analysis_provider_initialization.py`,
+  `test_services_layer_boundary.py` (COD-09, **adicionado na P1-C**),
+  `tests/integration/test_observability.py`,
   `tests/integration/database/test_database_timeouts.py`,
-  `test_database_timeout_observability.py`. [EXEC-LOCAL] confirmado que esses
-  módulos só colecionam com `src` no path (ex.: `test_services_layer_boundary`
-  importa `controllers`, que puxa `psycopg2`).
-- **Status:** **PARCIAL / legítimo.** Os imports de `src` que restam são
-  exceções válidas (teste de unidade de função pura e de fronteira de
-  camada). A régua pontua por fração de teste; não afirmável como 110/110.
-- **Riscos:** nenhum de produção; é classificação de teste.
+  `test_database_timeout_observability.py`. [INSPEÇÃO] `git log` do arquivo de
+  fronteira confirma origem na P1-C (`b15972a`); seu cabeçalho de imports puxa
+  `controllers.*` e `services.*`.
+- **Status:** **PARCIAL.** Os imports de `src` que restam são exceções válidas
+  (unidade de função pura e de fronteira de camada), mas a P1-C **adicionou**
+  imports internos novos; por isso o critério continua **parcial**, não
+  integralmente resolvido. A régua pontua por fração de teste; não afirmável
+  como 110/110.
+- **Riscos:** nenhum de produção; é classificação de teste. A leitura honesta
+  é que a fronteira de camada (COD-09) e o critério "não importar `src`"
+  (COD-08) têm uma tensão deliberada: o teste que prova COD-09 importa `src`.
 
 ### COD-09 - Sem chamada entre camadas irmãs
 - **Banca:** ❌ 19/20. `transaction_controller` importava
@@ -228,15 +258,24 @@ integralmente resolvido.
 - **P0→P1-D (P1-C):** fee e hash **extraídos** para `src/services/`
   (`transfer_fee.py`, `transaction_hash.py`); os módulos antigos em
   `controllers/` foram **removidos**.
-- **Evidência:** [INSPEÇÃO] `src/controllers/transaction_controller.py:9-13`
-  importa `from services.transfer_fee import calculate_transfer_fee_cents` e
-  `from services.transaction_hash import ...`. [EXEC-LOCAL]
-  `tests/unit/test_services_layer_boundary.py` (6 asserções) confirma que
-  `controllers.transaction_fee`/`controllers.transaction_hash` **não existem
-  mais** (`ModuleNotFoundError`) e que o controller resolve as funções a
-  partir de `services.*`. (Executado parcialmente: a parte pura passa; a parte
-  que importa o controller exige `psycopg2` e roda no CI.)
-- **Status:** **RESOLVIDO.**
+- **Evidência (separada por método, sem atribuir execução local ao teste de
+  fronteira):**
+  - **[INSPEÇÃO]** o refactor que moveu fee/hash de `controllers/` para
+    `src/services/` e o grafo de imports: `src/controllers/transaction_controller.py:9-13`
+    importa `from services.transfer_fee import calculate_transfer_fee_cents` e
+    `from services.transaction_hash import ...`; o teste
+    `tests/unit/test_services_layer_boundary.py` assere que
+    `controllers.transaction_fee`/`controllers.transaction_hash` **não existem
+    mais** (`ModuleNotFoundError`) e que o controller resolve as funções a
+    partir de `services.*`.
+  - **[CI]** o run verde `43549391873` inclui esse teste de fronteira (job
+    `test`). **Esta auditoria NÃO executou `test_services_layer_boundary.py`
+    localmente** - ele importa `controllers`, que puxa `psycopg2`, ausente
+    neste ambiente. O único teste executado localmente nesta rodada foi
+    `tests/unit/test_transfer_fee_invariants.py` (§3.2), que não cobre esta
+    fronteira. Não há, portanto, tag [EXEC-LOCAL] para COD-09.
+- **Status:** **RESOLVIDO** (por [INSPEÇÃO] do refactor/grafo de imports +
+  [CI] verde; sem prova de execução local do teste de fronteira).
 
 ### COD-10 - Rotas REST no singular
 - **Banca:** ⏸ 12/14 - não verificável.
@@ -296,19 +335,25 @@ integralmente resolvido.
 
 ### RFC-01 - RFC fiel à implementação
 - **Banca:** ✅ 50/50, com 4 omissões fora da contagem.
-- **Estado das 4 omissões:**
-  1. **Rotas `sample_entity` registradas e não citadas** → **neutralizada**:
-     rotas removidas e cobertas por teste (COD-02).
+- **Estado das 4 omissões (1 resolvida · 1 parcial · 2 pendentes):**
+  1. **Rotas `sample_entity` registradas e não citadas** → **RESOLVIDA**:
+     rotas removidas e cobertas por teste (COD-02). [INSPEÇÃO] `src/app.py`
+     não registra `sample_entity`.
   2. **Índices `idx_transaction_entry_account/transaction` ausentes do
-     diagrama** → documentados em `docs/P1D-DATABASE-AUDIT.md §1.10`
-     (parcial: confirmar no `docs/ERD.md`).
-  3. **Erros-base `QIT0000xx` declarados e não citados na RFC** → **pendente**.
+     diagrama** → **PARCIALMENTE DOCUMENTADA**: existem em
+     `database/database.sql` e estão descritos em
+     `docs/P1D-DATABASE-AUDIT.md §1.10`, mas o bloco `Table transaction_entry`
+     do `docs/ERD.md` **não tem seção `indexes {}`** e a tabela de índices do
+     ERD **não os lista**. Ainda pendente no próprio diagrama.
+  3. **Erros-base `QIT0000xx` declarados e não citados na RFC** → **PENDENTE**.
      [INSPEÇÃO] `src/errors/base_error.py` define `QIT000405/500/404/001/002/010`;
      não constam da RFC.
   4. **`BankSlipConnector` exportado embora boletos estejam fora de escopo** →
-     **pendente**. [INSPEÇÃO] `src/connectors/__init__.py:1` ainda exporta
+     **PENDENTE**. [INSPEÇÃO] `src/connectors/__init__.py:1` ainda exporta
      `BankSlipConnector`; `.env.example` mantém `BANKSLIP_API_*`.
-- **Status:** **RESOLVIDO no núcleo; 2 pendências documentais** (itens 3 e 4).
+- **Status:** **RESOLVIDO (50/50) com 1 omissão resolvida, 1 parcial e 2
+  pendentes documentais.** A contagem fora da nota é: 1 fechada, 1 parcial
+  (item 2, falta o diagrama do ERD), 2 abertas (itens 3 e 4).
 
 ---
 
@@ -381,8 +426,9 @@ idênticos, idempotência confirmada e rollback preservando dados. Esta auditori
 
 ### 3.9 Resumo da distinção testado × inspecionado
 - **[EXEC-LOCAL] (executado aqui):** apenas os invariantes puros de tarifa
-  (6 testes, §3.2) e a verificação de que os módulos legados de camada não
-  importam (parte pura de COD-09).
+  (6 testes, §3.2). O teste de fronteira de camada (COD-09,
+  `test_services_layer_boundary.py`) **não** foi executado localmente - importa
+  `controllers`/`psycopg2`; seu verde vem do CI.
 - **[CI] (atestado pelo run 43549391873):** toda a suíte de integração R01–R10,
   schema, concorrência, idempotência, atomicidade e o job de migração populada.
 - **[INSPEÇÃO] (lido, não executado):** SQL do schema e da migração, fluxo de
