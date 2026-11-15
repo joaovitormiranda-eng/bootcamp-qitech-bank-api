@@ -155,7 +155,12 @@ Reverificado em `src/services/transfer_fee.py`, `src/services/transaction_hash.p
 
 ### 8.2 Dependências (SEC-02/SEC-03) — [EXEC-LOCAL] + [CI]
 - `requirements.txt`: `requests==2.33.0`; `requirements-dev.txt`: `pytest==9.0.3`, `python-dotenv==1.2.2`.
-- **Reexecução local nesta rodada:** pip-audit → **No known vulnerabilities found** em ambos os arquivos; Bandit → exit 0, 0 achados. Reproduz o CI. **Resolvido e comprovado.**
+- **Reexecução local nesta rodada (dois escopos de Bandit):**
+  - `bandit -r src -ll` (piso MEDIUM, o comando do CI) → **No issues identified**, exit 0.
+  - `bandit -r src` (**todas as severidades**, sem o filtro `-ll`) → **No issues identified**, exit 0; breakdown por severidade: **Undefined 0 · Low 0 · Medium 0 · High 0** (3864 linhas analisadas).
+  Ou seja, não há achados **mesmo incluindo severidade/confiança baixas** — a afirmação "0 achados gerais" está lastreada na execução sem filtro, não apenas no comando do CI.
+  - pip-audit → **No known vulnerabilities found** em `requirements.txt` e `requirements-dev.txt`.
+  Reproduz o CI. **Resolvido e comprovado.**
 
 ### 8.3 Hardening do CI (SEC-08/09/10) — [CÓDIGO]
 - `permissions: contents: read` no topo do workflow.
@@ -164,6 +169,8 @@ Reverificado em `src/services/transfer_fee.py`, `src/services/transaction_hash.p
 
 ### 8.4 DevSecOps — Bandit e pip-audit são de fato bloqueantes? — [CÓDIGO] + [CI]
 **Sim.** No job `security` do `ci.yml`: `bandit -r src -ll` roda sem `continue-on-error`; o passo de pip-audit roda `pip-audit -r requirements.txt` e `pip-audit -r requirements-dev.txt` **sem `continue-on-error` e sem `|| true`** — o status de saída decide o job. Os três jobs (`test`, `migration`, `security`) funcionam na `main` integrada (run `43738426562`). **Resolvido e comprovado.**
+
+> **Nota sobre o escopo do Bandit no CI.** O `-ll` eleva o piso para MEDIUM, ou seja, o gate do CI reprovaria apenas achados de severidade **MEDIUM/HIGH**; achados LOW não derrubariam o job. Isso **não** mascara nada na baseline atual: a reexecução local **sem** `-ll` (§8.2) confirma **0 achados em todas as severidades** (Low/Medium/High = 0). Recomendação futura (fora desta auditoria): considerar rodar também o escopo sem filtro no CI, ou documentar explicitamente a política de severidade, para que um eventual achado LOW no futuro seja ao menos visível.
 
 ### 8.5 GitHub — proteções de branch, permissões, regras de merge — [NÃO VERIFICÁVEL]
 `GET /repos/.../branches/main/protection` retornou **HTTP 404** ao token desta sessão (configuração privada ou ausente). **Não verificável aqui.** Passos para o proprietário conferir (UI do repositório):
@@ -236,9 +243,16 @@ Revisados `README.md`, `ROTAS.md`, `ERD.md`, `FLUXOS.md`, `RFC.md`, `ARQUITETURA
 
 1. **Proteção de branch não verificável** (§8.5): conferir na UI que `test`, `migration` e `security` são checks **obrigatórios** na `main`. — *ação do proprietário.*
 2. **Comentário "determinístico" no SQL da migração** (§11): ajuste textual no SQL, fora do escopo desta auditoria. — *rodada de código futura.*
-3. **`docs/P2-CAMPAIGN-LOG.md`** permanece no diretório `docs/` (log interno de campanha, em inglês). Não é documentação de produto; avaliar remoção/realocação numa rodada futura. — *cosmético.*
 
 Nenhuma dessas pendências é bloqueante para o encerramento da P2.
+
+> **Correção quanto ao `P2-CAMPAIGN-LOG.md`.** Verificado nesta rodada que o
+> arquivo `docs/P2-CAMPAIGN-LOG.md` **não está versionado** — não consta de
+> `origin/main` (`git ls-tree -r origin/main` não o lista) nem é rastreado em
+> qualquer branch (`git ls-files` vazio); existe apenas como artefato **local
+> não rastreado** no diretório de trabalho. Portanto **não faz parte da entrega
+> versionada** e **não é uma pendência do repositório**. Uma versão anterior
+> deste relatório o listava como pendência cosmética; isso fica retificado aqui.
 
 ---
 
@@ -286,7 +300,8 @@ avaliação externa. Nenhum problema crítico ou alto foi confirmado nesta rodad
 | PRs 1–15 integrados | `gh api .../pulls?state=all` | todos `merged=true`; 0 abertos |
 | CI verde | `gh run view 43738426562 --json jobs` | `test/migration/security = success` |
 | Contagem de testes | `gh run view ... --log` | `554 passed in 29.12s` |
-| Bandit local | `bandit -r src -ll` | exit 0, No issues identified (3864 LOC) |
+| Bandit local (piso MEDIUM) | `bandit -r src -ll` | exit 0, No issues identified (3864 LOC) |
+| Bandit local (todas severidades) | `bandit -r src` | exit 0, No issues identified; Low/Medium/High = 0 |
 | pip-audit local | `pip-audit -r requirements*.txt` | No known vulnerabilities found (ambos) |
 | Tarifa/HALF_UP | leitura `src/services/transfer_fee.py` | PF 50bps/50/1000; PJ 100bps/100/1500; `(amt*bps+5000)//10000` |
 | Commit único | leitura `transaction_controller.py` | 1 `commit()` em `create` (linha 221) |
