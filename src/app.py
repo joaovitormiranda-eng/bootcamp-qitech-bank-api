@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI
 
 from constants import check_variables
@@ -34,14 +36,33 @@ def create_app() -> FastAPI:
     ordem DENTRO do bloco de middlewares tem consequência, e ela está
     explicada logo abaixo.
     """
-    # Os três None desligam a documentação automática: o FastAPI sabe
-    # gerar sozinho umas páginas descrevendo a API, e aqui elas não
-    # existem. Pra ver o que cada rota responde, mande uma requisição —
-    # tem exemplo pronto de cada uma no README.
+    # Documentação automática do FastAPI (/docs, /redoc, /openapi.json).
+    #
+    # Importante sobre o modelo de confiança: esses três caminhos NÃO têm
+    # bypass em BYPASS_ENDPOINTS, então passam pela mesma porta de
+    # INTERNAL-TOKEN das rotas R01-R09 — não há exposição pública não
+    # autenticada. Antes da P2-A o comentário aqui afirmava o oposto
+    # ("os três None desligam a documentação"), uma divergência entre
+    # comentário e configuração apontada como SEC-05 na auditoria.
+    #
+    # Correção (SEC-05), política fail-CLOSED: a documentação só é habilitada
+    # quando APP_ENV é EXPLICITAMENTE um ambiente de desenvolvimento conhecido
+    # ("local" ou "test"). Qualquer outro caso — "production", valor ausente,
+    # vazio ou desconhecido (ex.: "staging") — DESLIGA a doc. Em produção o
+    # inventário de rotas não precisa estar disponível nem a um portador do
+    # token; e um ambiente mal configurado deve falhar fechado, nunca expor por
+    # acidente.
+    #
+    # A leitura é feita diretamente de os.environ (e não do APP_ENV de
+    # constants.py): constants aplica o fallback "local" quando a variável está
+    # ausente, o que reabriria exatamente o caso fail-open que esta correção
+    # elimina. O fallback global de constants.py é preservado para o resto do
+    # código; aqui o gating de doc decide com base no valor cru do ambiente.
+    docs_enabled = os.environ.get("APP_ENV") in {"local", "test"}
     application = FastAPI(
-        docs_url="/docs",
-        redoc_url="/redoc",
-        openapi_url="/openapi.json",
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
     )
 
     # ────────────────────────────────────────────────────────────────
