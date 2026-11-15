@@ -7,6 +7,9 @@ from sqlalchemy.engine import Engine
 
 from tests.integration.transaction.support import (
     create_account,
+    get_account_via_api,
+    list_statement_via_api,
+    open_funded_account_via_api,
     read_transfer_state,
     send_transfer,
 )
@@ -41,12 +44,13 @@ def _assert_error(response, status: int, code: str) -> None:
     ids=["missing-target", "invalid-target", "extra-property"],
 )
 def test_transfer_rejects_structurally_invalid_body(
-    active_account_key: str,
     payload: dict,
 ) -> None:
+    account_key = open_funded_account_via_api()
+
     response = ClientRequisition.send(
         "POST",
-        f"/account/{active_account_key}/transaction",
+        f"/account/{account_key}/transaction",
         headers={
             "INTERNAL-TOKEN": INTERNAL_TOKEN,
             "Idempotency-Key": str(uuid4()),
@@ -62,11 +66,12 @@ def test_transfer_rejects_amount_below_minimum(
     api_database_engine: Engine,
     invalid_amount: int,
 ) -> None:
-    source_key = create_account(
-        api_database_engine,
-        balance_cents=100_000,
-    )
-    target_key = create_account(api_database_engine)
+    # Saldo de abertura semeado por SQL (sem lançamento) porque o teste
+    # afirma que o extrato da ORIGEM permanece VAZIO (data == []) após a
+    # rejeição; um DEPOSIT de funding deixaria um CRÉDITO visível no extrato
+    # da origem. A API não oferece saldo de abertura sem depósito.
+    source_key = create_account(api_database_engine, balance_cents=100_000)
+    target_key = open_funded_account_via_api()
     idempotency_key = uuid4()
 
     response = send_transfer(
@@ -75,27 +80,21 @@ def test_transfer_rejects_amount_below_minimum(
         idempotency_key,
         invalid_amount,
     )
-    state = read_transfer_state(
-        api_database_engine,
-        source_key,
-        target_key,
-        idempotency_key,
-    )
 
     _assert_error(response, 422, "TRX0004")
-    assert state["source"]["balance_cents"] == 100_000
-    assert state["target"]["balance_cents"] == 0
-    assert state["transactions"] == []
-    assert state["entries"] == []
+    assert get_account_via_api(source_key)["balance_cents"] == 100_000
+    assert get_account_via_api(target_key)["balance_cents"] == 0
+    assert list_statement_via_api(source_key)["data"] == []
+    assert list_statement_via_api(target_key)["data"] == []
 
 
 def test_transfer_rejects_self_transfer_without_consuming_key(
     api_database_engine: Engine,
 ) -> None:
-    account_key = create_account(
-        api_database_engine,
-        balance_cents=100_000,
-    )
+    # Saldo de abertura semeado por SQL (sem lançamento): o teste afirma que
+    # o extrato permanece VAZIO (data == []) após a rejeição; um DEPOSIT de
+    # funding deixaria um CRÉDITO no extrato.
+    account_key = create_account(api_database_engine, balance_cents=100_000)
     idempotency_key = uuid4()
 
     response = send_transfer(
@@ -103,22 +102,18 @@ def test_transfer_rejects_self_transfer_without_consuming_key(
         account_key,
         idempotency_key,
     )
-    state = read_transfer_state(
-        api_database_engine,
-        account_key,
-        account_key,
-        idempotency_key,
-    )
 
     _assert_error(response, 409, "TRX0002")
-    assert state["source"]["balance_cents"] == 100_000
-    assert state["transactions"] == []
-    assert state["entries"] == []
+    assert get_account_via_api(account_key)["balance_cents"] == 100_000
+    assert list_statement_via_api(account_key)["data"] == []
 
 
 def test_transfer_returns_source_account_not_found(
     api_database_engine: Engine,
 ) -> None:
+    # The source account intentionally does not exist, so there is no R05/R08
+    # projection to assert "source is None" against; keep the SQL probe while
+    # the live target is still verified below.
     source_key = str(uuid4())
     target_key = create_account(api_database_engine)
     idempotency_key = uuid4()
@@ -141,6 +136,9 @@ def test_transfer_returns_source_account_not_found(
 def test_transfer_returns_target_account_not_found(
     api_database_engine: Engine,
 ) -> None:
+    # The target account intentionally does not exist, so there is no R05/R08
+    # projection to assert "target is None" against; keep the SQL probe while
+    # the live source is still verified below.
     source_key = create_account(
         api_database_engine,
         balance_cents=100_000,
@@ -168,6 +166,9 @@ def test_transfer_rejects_non_active_source(
     api_database_engine: Engine,
     status: str,
 ) -> None:
+    # An INACTIVE/CLOSED source cannot be arranged through the public API
+    # (R04 always opens an ACTIVE account), so the pre-state and persistence
+    # check stay on SQL.
     initial_balance = 100_000 if status == "INACTIVE" else 0
     source_key = create_account(
         api_database_engine,
@@ -197,6 +198,9 @@ def test_transfer_rejects_non_active_target(
     api_database_engine: Engine,
     status: str,
 ) -> None:
+    # An INACTIVE/CLOSED target cannot be arranged through the public API
+    # (R04 always opens an ACTIVE account), so the pre-state and persistence
+    # check stay on SQL.
     source_key = create_account(
         api_database_engine,
         balance_cents=100_000,
@@ -222,62 +226,63 @@ def test_transfer_rejects_non_active_target(
 def test_transfer_rejects_insufficient_balance(
     api_database_engine: Engine,
 ) -> None:
-    source_key = create_account(
-        api_database_engine,
-        balance_cents=50_249,
-    )
-    target_key = create_account(api_database_engine)
+    # Saldo de abertura semeado por SQL (sem lançamento): o teste afirma que
+    # o extrato da ORIGEM permanece VAZIO (data == []) após a rejeição; um
+    # DEPOSIT de funding deixaria um CRÉDITO no próprio extrato da origem.
+    source_key = create_account(api_database_engine, balance_cents=50_249)
+    target_key = open_funded_account_via_api()
     idempotency_key = uuid4()
 
     response = send_transfer(source_key, target_key, idempotency_key)
-    state = read_transfer_state(
-        api_database_engine,
-        source_key,
-        target_key,
-        idempotency_key,
-    )
 
     _assert_error(response, 422, "TRX0001")
-    assert state["source"]["balance_cents"] == 50_249
-    assert state["target"]["balance_cents"] == 0
-    assert state["transactions"] == []
-    assert state["entries"] == []
+    assert get_account_via_api(source_key)["balance_cents"] == 50_249
+    assert get_account_via_api(target_key)["balance_cents"] == 0
+    assert list_statement_via_api(source_key)["data"] == []
+    assert list_statement_via_api(target_key)["data"] == []
 
 
 def test_transfer_accepts_exact_amount_plus_fee_balance(
     api_database_engine: Engine,
 ) -> None:
-    source_key = create_account(
-        api_database_engine,
-        balance_cents=50_250,
-    )
-    target_key = create_account(api_database_engine)
+    # Saldo de abertura semeado por SQL (sem lançamento) porque o teste
+    # afirma que o extrato da ORIGEM é EXATAMENTE [PRINCIPAL, FEE]; um
+    # DEPOSIT de funding adicionaria um terceiro lançamento. O saldo exato
+    # (amount + fee) é preservado.
+    source_key = create_account(api_database_engine, balance_cents=50_250)
+    target_key = open_funded_account_via_api()
     idempotency_key = uuid4()
 
     response = send_transfer(source_key, target_key, idempotency_key)
-    state = read_transfer_state(
-        api_database_engine,
-        source_key,
-        target_key,
-        idempotency_key,
-    )
 
     assert response.response_status == 201
     assert response.response_json["fee_cents"] == 250
-    assert state["source"]["balance_cents"] == 0
-    assert state["target"]["balance_cents"] == 50_000
-    assert len(state["transactions"]) == 1
-    assert len(state["entries"]) == 3
+    assert get_account_via_api(source_key)["balance_cents"] == 0
+    assert get_account_via_api(target_key)["balance_cents"] == 50_000
+    # Exactly one transaction producing the two source-side entries
+    # (PRINCIPAL + FEE); the third ledger entry is the target CREDIT, proven
+    # by the target balance above.
+    source_entries = list_statement_via_api(
+        source_key,
+        query_params={"order_by": "asc"},
+    )["data"]
+    assert [entry["entry_type"] for entry in source_entries] == [
+        "PRINCIPAL",
+        "FEE",
+    ]
+    target_entries = list_statement_via_api(target_key)["data"]
+    assert len(target_entries) == 1
+    assert target_entries[0]["entry_type"] == "PRINCIPAL"
 
 
 def test_transfer_rejects_amount_above_bigint(
     api_database_engine: Engine,
 ) -> None:
-    source_key = create_account(
-        api_database_engine,
-        balance_cents=100_000,
-    )
-    target_key = create_account(api_database_engine)
+    # Saldo de abertura semeado por SQL (sem lançamento): o teste afirma que
+    # o extrato da ORIGEM permanece VAZIO (data == []) após a rejeição; um
+    # DEPOSIT de funding deixaria um CRÉDITO no próprio extrato da origem.
+    source_key = create_account(api_database_engine, balance_cents=100_000)
+    target_key = open_funded_account_via_api()
     idempotency_key = uuid4()
 
     response = send_transfer(
@@ -286,23 +291,20 @@ def test_transfer_rejects_amount_above_bigint(
         idempotency_key,
         BIGINT_MAX + 1,
     )
-    state = read_transfer_state(
-        api_database_engine,
-        source_key,
-        target_key,
-        idempotency_key,
-    )
 
     _assert_error(response, 422, "TRX0004")
-    assert state["source"]["balance_cents"] == 100_000
-    assert state["target"]["balance_cents"] == 0
-    assert state["transactions"] == []
-    assert state["entries"] == []
+    assert get_account_via_api(source_key)["balance_cents"] == 100_000
+    assert get_account_via_api(target_key)["balance_cents"] == 0
+    assert list_statement_via_api(source_key)["data"] == []
+    assert list_statement_via_api(target_key)["data"] == []
 
 
 def test_transfer_rejects_amount_plus_fee_above_bigint(
     api_database_engine: Engine,
 ) -> None:
+    # A source balance of BIGINT_MAX is unreachable through API deposits
+    # (the overflow guard rejects it), so the near-overflow pre-state and its
+    # persistence check stay on SQL.
     source_key = create_account(
         api_database_engine,
         balance_cents=BIGINT_MAX,
@@ -333,6 +335,9 @@ def test_transfer_rejects_amount_plus_fee_above_bigint(
 def test_transfer_rejects_target_balance_overflow(
     api_database_engine: Engine,
 ) -> None:
+    # A target balance of BIGINT_MAX-500 is unreachable through API deposits
+    # (the overflow guard rejects it), so the near-overflow pre-state and its
+    # persistence check stay on SQL.
     source_key = create_account(
         api_database_engine,
         balance_cents=2_000,

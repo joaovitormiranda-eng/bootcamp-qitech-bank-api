@@ -1,4 +1,4 @@
-"""Pricing PF/PJ aplicado ao fluxo real de TRANSFER."""
+"""Pricing PF/PJ aplicado ao fluxo real de TRANSFER (black-box via HTTP)."""
 
 from uuid import uuid4
 
@@ -7,7 +7,9 @@ from sqlalchemy.engine import Engine
 
 from tests.integration.transaction.support import (
     create_account,
-    read_transfer_state,
+    get_account_via_api,
+    list_statement_via_api,
+    open_funded_account_via_api,
     send_transfer,
 )
 
@@ -29,15 +31,19 @@ def test_transfer_fee_depends_only_on_source_client_type(
 ) -> None:
     amount_cents = 50_000
     initial_source_balance = 100_000
+    # O saldo inicial da origem é semeado por SQL (create_account define o
+    # balance_cents de abertura SEM produzir lançamento), porque este teste
+    # afirma que o extrato da ORIGEM contém EXATAMENTE [PRINCIPAL, FEE]. Um
+    # funding via DEPOSIT (open_funded_account_via_api) adicionaria um
+    # CRÉDITO visível ao extrato da própria origem, poluindo a asserção. A
+    # API pública não permite abrir conta com saldo inicial sem depósito,
+    # logo o SQL de abertura é a fixture fiel de "formato de extrato".
     source_key = create_account(
         api_database_engine,
         client_type=source_type,
         balance_cents=initial_source_balance,
     )
-    target_key = create_account(
-        api_database_engine,
-        client_type=target_type,
-    )
+    target_key = open_funded_account_via_api(client_type=target_type)
     idempotency_key = uuid4()
 
     response = send_transfer(
@@ -46,22 +52,30 @@ def test_transfer_fee_depends_only_on_source_client_type(
         idempotency_key,
         amount_cents,
     )
-    state = read_transfer_state(
-        api_database_engine,
-        source_key,
-        target_key,
-        idempotency_key,
-    )
 
     assert response.response_status == 201
     assert response.response_json["fee_cents"] == expected_fee_cents
-    assert state["entries"][1]["direction"] == "DEBIT"
-    assert state["entries"][1]["entry_type"] == "FEE"
-    assert state["entries"][1]["amount_cents"] == expected_fee_cents
-    assert state["source"]["balance_cents"] == (
+
+    source_entries = list_statement_via_api(
+        source_key,
+        query_params={"order_by": "asc"},
+    )["data"]
+    # Ordem estável do lançamento: PRINCIPAL antes da FEE na origem.
+    assert [entry["entry_type"] for entry in source_entries] == [
+        "PRINCIPAL",
+        "FEE",
+    ]
+    fee_entry = source_entries[1]
+    assert fee_entry["direction"] == "DEBIT"
+    assert fee_entry["entry_type"] == "FEE"
+    assert fee_entry["amount_cents"] == expected_fee_cents
+
+    source_account = get_account_via_api(source_key)
+    target_account = get_account_via_api(target_key)
+    assert source_account["balance_cents"] == (
         initial_source_balance - amount_cents - expected_fee_cents
     )
-    assert state["target"]["balance_cents"] == amount_cents
+    assert target_account["balance_cents"] == amount_cents
 
 
 @pytest.mark.parametrize(
@@ -94,12 +108,15 @@ def test_transfer_persists_source_pricing_profile_fee(
     expected_fee_cents: int,
 ) -> None:
     initial_source_balance = amount_cents + expected_fee_cents + 10_000
+    # Saldo inicial semeado por SQL (sem lançamento) porque o teste afirma
+    # len(source_entries) == 2 e [PRINCIPAL, FEE] exatos no extrato da
+    # origem; um DEPOSIT de funding adicionaria um terceiro lançamento.
     source_key = create_account(
         api_database_engine,
         client_type=source_type,
         balance_cents=initial_source_balance,
     )
-    target_key = create_account(api_database_engine)
+    target_key = open_funded_account_via_api()
     idempotency_key = uuid4()
 
     response = send_transfer(
@@ -108,19 +125,25 @@ def test_transfer_persists_source_pricing_profile_fee(
         idempotency_key,
         amount_cents,
     )
-    state = read_transfer_state(
-        api_database_engine,
-        source_key,
-        target_key,
-        idempotency_key,
-    )
 
     assert response.response_status == 201
     assert response.response_json["fee_cents"] == expected_fee_cents
-    assert len(state["entries"]) == 3
-    assert state["entries"][1]["entry_type"] == "FEE"
-    assert state["entries"][1]["amount_cents"] == expected_fee_cents
-    assert state["source"]["balance_cents"] == (
+
+    source_entries = list_statement_via_api(
+        source_key,
+        query_params={"order_by": "asc"},
+    )["data"]
+    assert len(source_entries) == 2
+    assert [entry["entry_type"] for entry in source_entries] == [
+        "PRINCIPAL",
+        "FEE",
+    ]
+    assert source_entries[1]["entry_type"] == "FEE"
+    assert source_entries[1]["amount_cents"] == expected_fee_cents
+
+    source_account = get_account_via_api(source_key)
+    target_account = get_account_via_api(target_key)
+    assert source_account["balance_cents"] == (
         initial_source_balance - amount_cents - expected_fee_cents
     )
-    assert state["target"]["balance_cents"] == amount_cents
+    assert target_account["balance_cents"] == amount_cents
