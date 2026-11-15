@@ -448,23 +448,25 @@ jobs:
   # Política de falha (explícita e honesta):
   #   - bandit (SAST) é BLOQUEANTE. A auditoria P2-A registrou 0 achados e a
   #     baseline confirma exit 0; manter em 0 é um gate sustentável e barato.
-  #   - pip-audit é OBSERVAÇÃO (continue-on-error) POR ENQUANTO. A main ainda
-  #     carrega a advisory de `requests` (corrigida no PR SEC-02, ainda não
-  #     integrado): tornar pip-audit bloqueante agora criaria um check
-  #     impossível de passar na baseline — o anti-padrão que a campanha proíbe.
-  #     O passo roda de verdade e imprime os achados reais (nada é escondido);
-  #     quando os PRs SEC-02/SEC-03 forem integrados, basta remover o
-  #     `continue-on-error` num follow-up para torná-lo bloqueante sem fingir
-  #     que o repositório já está limpo.
+  #   - pip-audit é BLOQUEANTE. Com SEC-02 (requests 2.33.0) e SEC-03 (pytest
+  #     9.0.3, python-dotenv 1.2.2) já integrados na main, pip-audit reporta
+  #     "No known vulnerabilities found" em requirements.txt E em
+  #     requirements-dev.txt. O passo deixou de ser observação: qualquer
+  #     advisory nova (nova dependência ou CVE recém-publicada) passa a
+  #     reprovar o job, sem continue-on-error e sem `|| true` mascarando o
+  #     status de saída. A auditoria de dependências é agora um gate efetivo.
   security:
     runs-on: ubuntu-latest
 
     steps:
+      # Mesmos SHAs em runtime Node.js 24 do PR de hardening de CI (SEC-09):
+      # checkout v5.1.0, setup-python v6.3.0. O GitHub removeu o Node 20 dos
+      # runners; estes releases declaram `using: node24` na origem.
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11"
 
@@ -479,10 +481,12 @@ jobs:
           # MEDIUM (ignora ruído LOW), alinhado ao resultado da auditoria.
           bandit -r src -ll
 
-      - name: pip-audit dependency scan (observation — see failure policy above)
-        continue-on-error: true
+      - name: pip-audit dependency scan (blocking — must stay clean)
         run: |
+          # Sem continue-on-error e sem `|| true`: o status de saída do
+          # pip-audit decide o job. Com SEC-02/SEC-03 integrados, ambos os
+          # arquivos estão limpos; uma advisory nova reprova aqui.
           echo "== requirements.txt =="
-          pip-audit -r requirements.txt || true
+          pip-audit -r requirements.txt
           echo "== requirements-dev.txt =="
-          pip-audit -r requirements-dev.txt || true
+          pip-audit -r requirements-dev.txt
