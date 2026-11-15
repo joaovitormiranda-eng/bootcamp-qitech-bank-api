@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from constants import check_variables
+from constants import APP_ENV, check_variables
 from errors import register_error_handlers
 from errors.base_error import error_verification
 from middlewares import (
@@ -34,14 +34,26 @@ def create_app() -> FastAPI:
     ordem DENTRO do bloco de middlewares tem consequência, e ela está
     explicada logo abaixo.
     """
-    # Os três None desligam a documentação automática: o FastAPI sabe
-    # gerar sozinho umas páginas descrevendo a API, e aqui elas não
-    # existem. Pra ver o que cada rota responde, mande uma requisição —
-    # tem exemplo pronto de cada uma no README.
+    # Documentação automática do FastAPI (/docs, /redoc, /openapi.json).
+    #
+    # Importante sobre o modelo de confiança: esses três caminhos NÃO têm
+    # bypass em BYPASS_ENDPOINTS, então passam pela mesma porta de
+    # INTERNAL-TOKEN das rotas R01-R09 — não há exposição pública não
+    # autenticada. Antes da P2-A o comentário aqui afirmava o oposto
+    # ("os três None desligam a documentação"), uma divergência entre
+    # comentário e configuração apontada como SEC-05 na auditoria.
+    #
+    # Correção (SEC-05): além de alinhar comentário e código, a geração
+    # da documentação agora é desligada quando APP_ENV == "production",
+    # como defesa em profundidade — em produção o inventário de rotas não
+    # precisa estar disponível nem mesmo a um portador do token. Em
+    # "local" e "test" (o que o CI usa) a doc continua ligada, preservando
+    # os ambientes atuais e a suíte.
+    docs_enabled = APP_ENV != "production"
     application = FastAPI(
-        docs_url="/docs",
-        redoc_url="/redoc",
-        openapi_url="/openapi.json",
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
     )
 
     # ────────────────────────────────────────────────────────────────
