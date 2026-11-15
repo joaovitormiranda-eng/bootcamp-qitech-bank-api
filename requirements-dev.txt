@@ -3,8 +3,21 @@
 
 -r requirements.txt
 
-pytest==7.4.4
+# SEC-03 (auditoria P2-A): dependências de DEV/CI com advisories conhecidas,
+# todas confirmadas por pip-audit. Vetores locais ao host de teste/CI; não
+# entram na imagem de produção (o Dockerfile instala só requirements.txt).
+#
+# pytest 7.4.4 -> 9.0.3 corrige PYSEC-2026-1845 / CVE-2025-71176 (diretório
+# /tmp/pytest-of-{user} previsível). É um salto de duas majors; validado:
+# o projeto não tem pytest.ini/pyproject/setup.cfg, não usa APIs removidas
+# em 8/9 (yield_fixture, pytest.collect, warns(None), retorno em teste,
+# nose-style), e pytest-cov 4.1.0 resolve com pytest 9.0.3 (pip check limpo,
+# cobertura roda). A prova verde é a suíte completa no CI.
+pytest==9.0.3
 pytest-cov==4.1.0
-python-dotenv==1.0.1
+# python-dotenv 1.0.1 -> 1.2.2 corrige PYSEC-2026-2270 / CVE-2026-28684
+# (set_key()/unset_key() seguiam symlink ao reescrever .env). O projeto não
+# chama set_key/unset_key, então é higiene; bump de minor, baixo risco.
+python-dotenv==1.2.2
 # ZoneInfo precisa dos dados IANA no Windows para os testes de idade civil.
 tzdata==2026.5
