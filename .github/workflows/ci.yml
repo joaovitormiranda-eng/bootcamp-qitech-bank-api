@@ -452,3 +452,53 @@ jobs:
           "
           echo "Rollback validado: estrutura legada restaurada e dados preservados."
 
+
+  # Job de DevSecOps (P2, Bloco E). ISOLADO e aditivo: não altera `test` nem
+  # `migration`, não provisiona banco e não toca segredos. Roda duas análises
+  # de segurança reprodutíveis sobre o código-fonte e as dependências.
+  #
+  # Política de falha (explícita e honesta):
+  #   - bandit (SAST) é BLOQUEANTE. A auditoria P2-A registrou 0 achados e a
+  #     baseline confirma exit 0; manter em 0 é um gate sustentável e barato.
+  #   - pip-audit é BLOQUEANTE. Com SEC-02 (requests 2.33.0) e SEC-03 (pytest
+  #     9.0.3, python-dotenv 1.2.2) já integrados na main, pip-audit reporta
+  #     "No known vulnerabilities found" em requirements.txt E em
+  #     requirements-dev.txt. O passo deixou de ser observação: qualquer
+  #     advisory nova (nova dependência ou CVE recém-publicada) passa a
+  #     reprovar o job, sem continue-on-error e sem `|| true` mascarando o
+  #     status de saída. A auditoria de dependências é agora um gate efetivo.
+  security:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Mesmos SHAs em runtime Node.js 24 do PR de hardening de CI (SEC-09):
+      # checkout v5.1.0, setup-python v6.3.0. O GitHub removeu o Node 20 dos
+      # runners; estes releases declaram `using: node24` na origem.
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Install security tools (pinned for reproducibility)
+        run: |
+          python -m pip install --upgrade pip
+          pip install "bandit==1.9.4" "pip-audit==2.10.1"
+
+      - name: Bandit SAST (blocking — must stay at 0 findings)
+        run: |
+          # -r src: varre só o código da aplicação; -ll eleva o piso para
+          # MEDIUM (ignora ruído LOW), alinhado ao resultado da auditoria.
+          bandit -r src -ll
+
+      - name: pip-audit dependency scan (blocking — must stay clean)
+        run: |
+          # Sem continue-on-error e sem `|| true`: o status de saída do
+          # pip-audit decide o job. Com SEC-02/SEC-03 integrados, ambos os
+          # arquivos estão limpos; uma advisory nova reprova aqui.
+          echo "== requirements.txt =="
+          pip-audit -r requirements.txt
+          echo "== requirements-dev.txt =="
+          pip-audit -r requirements-dev.txt
