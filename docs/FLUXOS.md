@@ -4,9 +4,9 @@
 
 **Autores:** João Vitor Miranda Sousa · Mohamad Ahmad Barakat
 
-**Versão:** Final · 12/10/2026
+**Versão:** 2.1 · revisão P2-Final (fluxos inalterados; referências atualizadas) · base 12/10/2026
 
-**Documentos relacionados:** [RFC](RFC.md) · [Modelo de dados (ERD)](ERD.md) · [Contratos das rotas](ROTAS.md)
+**Documentos relacionados:** [RFC](RFC.md) · [Modelo de dados (ERD)](ERD.md) · [Contratos das rotas](ROTAS.md) · [Arquitetura](ARQUITETURA.md) · [Segurança](SEGURANCA.md)
 
 ## 1. Visão geral
 

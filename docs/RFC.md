@@ -6,6 +6,21 @@
 | **Data** | 12/10/2026 |
 | **Versão** | 2.1 |
 
+> **Nota editorial (P2-Final, preservação histórica).** Este documento é a **RFC
+> v2.1 histórica (12/10/2026)** e é mantido **sem reescrita** — inclusive os dois
+> diagramas de banco abaixo, que retratam o schema **anterior à rodada P1-D**
+> (enumerações como colunas `VARCHAR`, `transaction_entry` sem `entry_key`). O
+> schema **efetivamente integrado** à `main` evoluiu depois desta RFC: as
+> enumerações passaram a tabelas de lookup referenciadas por `FOREIGN KEY` e
+> `transaction_entry` ganhou `entry_key` (P1-D/COD-05/COD-06), totalizando **15
+> tabelas**. Para o modelo de dados **atual e autoritativo**, consulte
+> [ERD.md](ERD.md) e [`database/database.sql`](../database/database.sql); para a
+> evolução, [MIGRACOES.md](MIGRACOES.md) e [AUDITORIAS.md](AUDITORIAS.md). Os
+> **requisitos, contratos de rota (R01–R10), regras financeiras e invariantes**
+> descritos nesta RFC permanecem válidos e implementados; apenas a representação
+> física das enumerações mudou. Esta nota distingue **requisito histórico** de
+> **implementação atual**, sem alterar o conteúdo original da RFC.
+
 ## Contextualização
 
 ### Entendendo o problema
