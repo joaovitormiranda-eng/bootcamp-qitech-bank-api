@@ -53,7 +53,7 @@ O Compose cria automaticamente o schema de um volume novo a partir de `database/
 | [Migrações de schema — MIGRACOES](docs/MIGRACOES.md) | Schema populado, idempotência da migração e rollback com preservação de dados |
 | [Histórico de auditorias — AUDITORIAS](docs/AUDITORIAS.md) | Rodadas P1/P2, decisões, matriz de rastreabilidade documentação↔código e riscos residuais |
 
-**Modelo interativo:** [visualizar o ERD no dbdiagram.io](https://dbdiagram.io/d/ERD-bootcamp-QItech-6abc58be5869425612d24fa6). O esquema físico versionado encontra-se em [`database/database.sql`](database/database.sql).
+**Fonte autoritativa do modelo:** o esquema físico versionado em [`database/database.sql`](database/database.sql) (15 tabelas, pós-P1-D) e o [ERD](docs/ERD.md), que inclui DBML reproduzível. Existe um [modelo externo no dbdiagram.io](https://dbdiagram.io/d/ERD-bootcamp-QItech-6abc58be5869425612d24fa6) criado durante a entrega inicial; ele é **referência histórica e não foi verificado** quanto à sincronia com as 15 tabelas e FKs atuais, portanto **não** deve ser tratado como o ERD atual validado. Para o modelo atual, use `database.sql` e o DBML do ERD.
 
 ## Funcionalidades e endpoints
 
@@ -125,7 +125,7 @@ Resposta HTTP
 
 O detalhamento de cada camada, com diagramas de componentes e de sequência, está em [docs/ARQUITETURA.md](docs/ARQUITETURA.md).
 
-O banco possui **15 tabelas**: **8 de domínio** (cadastro, contas e movimentações financeiras) e **7 de lookup** (`client_status`, `account_status`, `client_type`, `transaction_type`, `transaction_direction`, `entry_type`, `actor_type`). As tabelas de lookup foram introduzidas na rodada **P1-D** (COD-06) para substituir enumerações `VARCHAR + CHECK IN (...)` por integridade referencial via `FOREIGN KEY`; a representação textual externa continua sendo o `enumerator`, resolvido pela camada ORM. Os históricos de mudança de estado são persistidos separadamente dos estados atuais, enquanto `financial_transaction` e `transaction_entry` registram as operações e seus efeitos (este último com `entry_key UUID` público, também de P1-D/COD-05). Consulte o [ERD](docs/ERD.md) para o modelo completo, cardinalidades e restrições.
+O banco possui **15 tabelas**: **8 de domínio** (cadastro, contas e movimentações financeiras) e **7 de lookup** (`client_status`, `account_status`, `client_type`, `transaction_type`, `transaction_direction`, `entry_type`, `actor_type`). Dessas sete, `client_status` e `account_status` **já existiam no schema legado**; a rodada **P1-D** (COD-06) acrescentou as **cinco** restantes (`client_type`, `transaction_type`, `transaction_direction`, `entry_type`, `actor_type`), substituindo enumerações `VARCHAR + CHECK IN (...)` por integridade referencial via `FOREIGN KEY` — foi essa adição que levou o total a 15 tabelas. A representação textual externa continua sendo o `enumerator`, resolvido pela camada ORM. Os históricos de mudança de estado são persistidos separadamente dos estados atuais, enquanto `financial_transaction` e `transaction_entry` registram as operações e seus efeitos (este último com `entry_key UUID` público, também de P1-D/COD-05). Consulte o [ERD](docs/ERD.md) para o modelo completo, cardinalidades e restrições.
 
 ## Executar localmente com Docker
 

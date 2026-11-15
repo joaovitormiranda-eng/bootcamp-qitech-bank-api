@@ -8,7 +8,7 @@
 
 **Documentos relacionados:** [RFC](RFC.md) · [RFC em PDF](RFC.pdf) · [Rotas](ROTAS.md) · [Fluxos](FLUXOS.md) · [Arquitetura](ARQUITETURA.md) · [Migrações](MIGRACOES.md) · [Esquema PostgreSQL](../database/database.sql)
 
-**Diagrama interativo:** [Visualizar o modelo no dbdiagram.io](https://dbdiagram.io/d/ERD-bootcamp-QItech-6abc58be5869425612d24fa6)
+**Modelo externo (histórico, não verificado):** há um [modelo no dbdiagram.io](https://dbdiagram.io/d/ERD-bootcamp-QItech-6abc58be5869425612d24fa6) criado na entrega inicial. **Não foi confirmado** que ele reflita o schema atual de 15 tabelas e as FKs pós-P1-D; trate-o como referência histórica. O modelo **atual e autoritativo** é o DDL em [`database/database.sql`](../database/database.sql) e o DBML da [Seção 6](#6-especificação-dbml-complementar) deste documento (mantido em sincronia com o schema).
 
 ## 1. Visão geral
 
@@ -21,15 +21,18 @@ A estrutura contém **15 tabelas**: **8 de domínio** e **7 de lookup**, organiz
 | Cadastro | `client`, `individual_client`, `company_client`, `client_status_event` | Identidade PF/PJ, estado cadastral e histórico de transições |
 | Contas | `account`, `account_status_event` | Conta vinculada ao cliente, saldo e histórico de estados |
 | Financeiro | `financial_transaction`, `transaction_entry` | Operações, idempotência e lançamentos que compõem o extrato |
-| Lookup (enumerações) | `client_status`, `account_status`, `client_type`, `transaction_type`, `transaction_direction`, `entry_type`, `actor_type` | Valores enumerados normalizados `(id, enumerator)` referenciados por `FOREIGN KEY` |
+| Lookup (enumerações) | `client_status`, `account_status` (já no schema legado) · `client_type`, `transaction_type`, `transaction_direction`, `entry_type`, `actor_type` (adicionadas em P1-D) | Valores enumerados normalizados `(id, enumerator)` referenciados por `FOREIGN KEY` |
 
-> **Evolução P1-D (COD-05/COD-06).** As **7 tabelas de lookup** e as FKs
-> correspondentes foram introduzidas na rodada P1-D para substituir enumerações
-> `VARCHAR + CHECK IN (...)` por integridade referencial. As colunas textuais
-> `client.client_type`, `financial_transaction.transaction_type`,
-> `transaction_entry.direction`, `transaction_entry.entry_type` e os
-> `*_status_event.actor_type` passaram a ser FKs `*_id` (`client_type_id`,
-> `transaction_type_id`, `direction_id`, `entry_type_id`, `actor_type_id`). A
+> **Evolução P1-D (COD-05/COD-06).** Das **7 tabelas de lookup**, duas
+> (`client_status` e `account_status`) **já existiam no schema legado**; a rodada
+> P1-D **acrescentou as cinco restantes** (`client_type`, `transaction_type`,
+> `transaction_direction`, `entry_type`, `actor_type`), levando o total do banco
+> a 15 tabelas. O objetivo foi substituir enumerações `VARCHAR + CHECK IN (...)`
+> por integridade referencial: as colunas textuais `client.client_type`,
+> `financial_transaction.transaction_type`, `transaction_entry.direction`,
+> `transaction_entry.entry_type` e os `*_status_event.actor_type` passaram a ser
+> FKs `*_id` (`client_type_id`, `transaction_type_id`, `direction_id`,
+> `entry_type_id`, `actor_type_id`) para as lookups correspondentes. A
 > representação textual externa continua sendo o `enumerator`, resolvido pela
 > camada ORM. `transaction_entry` ganhou a chave pública `entry_key UUID NOT NULL
 > UNIQUE` (COD-05), preservando `id BIGINT` como PK (locks e ordenação do extrato

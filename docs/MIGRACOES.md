@@ -36,9 +36,15 @@ Fato verificado (leitura do SQL):
   RESTRICT`, remove o `CHECK IN (...)` e **dropa a coluna textual**, e cria os
   índices de suporte (`idx_client_type`, `idx_financial_transaction_type`,
   `idx_transaction_entry_direction`, `idx_transaction_entry_entry_type`).
-- **COD-05:** adiciona `transaction_entry.entry_key UUID NOT NULL UNIQUE`, com
-  backfill determinístico por linha via `gen_random_uuid()` (extensão `pgcrypto`),
-  preservando a PK `id BIGINT` e todas as FKs/ordenação.
+- **COD-05:** adiciona `transaction_entry.entry_key UUID NOT NULL UNIQUE`,
+  fazendo o backfill por linha com `gen_random_uuid()` (extensão `pgcrypto`),
+  preservando a PK `id BIGINT` e todas as FKs/ordenação. Os UUIDs gerados são
+  **aleatórios** (não determinísticos): cada execução que precise preencher uma
+  linha nova sorteia um UUID novo. Isso **não** compromete a idempotência da
+  migração — o backfill roda com `WHERE entry_key IS NULL`, então uma reexecução
+  **preserva** os `entry_key` já existentes e não os regera (ver §3 e §4). Ou
+  seja, a propriedade garantida é "não sobrescrever chaves existentes em
+  reexecução", e não "produzir sempre o mesmo UUID para a mesma linha".
 - **Validação embutida:** a própria migração aborta via `RAISE EXCEPTION` se
   houver FK/`entry_key` nula, `entry_key` duplicado ou lookup com `enumerator`
   duplicado — **nunca** perda silenciosa de dados.
