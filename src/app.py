@@ -1,6 +1,8 @@
+import os
+
 from fastapi import FastAPI
 
-from constants import APP_ENV, check_variables
+from constants import check_variables
 from errors import register_error_handlers
 from errors.base_error import error_verification
 from middlewares import (
@@ -43,13 +45,20 @@ def create_app() -> FastAPI:
     # ("os três None desligam a documentação"), uma divergência entre
     # comentário e configuração apontada como SEC-05 na auditoria.
     #
-    # Correção (SEC-05): além de alinhar comentário e código, a geração
-    # da documentação agora é desligada quando APP_ENV == "production",
-    # como defesa em profundidade — em produção o inventário de rotas não
-    # precisa estar disponível nem mesmo a um portador do token. Em
-    # "local" e "test" (o que o CI usa) a doc continua ligada, preservando
-    # os ambientes atuais e a suíte.
-    docs_enabled = APP_ENV != "production"
+    # Correção (SEC-05), política fail-CLOSED: a documentação só é habilitada
+    # quando APP_ENV é EXPLICITAMENTE um ambiente de desenvolvimento conhecido
+    # ("local" ou "test"). Qualquer outro caso — "production", valor ausente,
+    # vazio ou desconhecido (ex.: "staging") — DESLIGA a doc. Em produção o
+    # inventário de rotas não precisa estar disponível nem a um portador do
+    # token; e um ambiente mal configurado deve falhar fechado, nunca expor por
+    # acidente.
+    #
+    # A leitura é feita diretamente de os.environ (e não do APP_ENV de
+    # constants.py): constants aplica o fallback "local" quando a variável está
+    # ausente, o que reabriria exatamente o caso fail-open que esta correção
+    # elimina. O fallback global de constants.py é preservado para o resto do
+    # código; aqui o gating de doc decide com base no valor cru do ambiente.
+    docs_enabled = os.environ.get("APP_ENV") in {"local", "test"}
     application = FastAPI(
         docs_url="/docs" if docs_enabled else None,
         redoc_url="/redoc" if docs_enabled else None,
