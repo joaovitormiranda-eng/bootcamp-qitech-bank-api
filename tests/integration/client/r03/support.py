@@ -209,14 +209,15 @@ def prepare_client_status(
                         client_id,
                         from_status_id,
                         to_status_id,
-                        actor_type,
+                        actor_type_id,
                         reason,
                         created_at
                     ) VALUES (
                         :client_id,
                         :from_status_id,
                         :to_status_id,
-                        'INTERNAL',
+                        (SELECT id FROM actor_type
+                         WHERE enumerator = 'INTERNAL'),
                         'Preparação do cenário de teste',
                         NOW()
                     )

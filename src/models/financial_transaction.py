@@ -1,8 +1,9 @@
-from sqlalchemy import BigInteger, CHAR, Column, DateTime, String
+from sqlalchemy import BigInteger, CHAR, Column, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from models.base import Base
+from models.transaction_type import TransactionType
 
 
 class FinancialTransaction(Base):
@@ -12,8 +13,18 @@ class FinancialTransaction(Base):
     transaction_key = Column(UUID(as_uuid=True), nullable=False, unique=True)
     request_control_key = Column(UUID(as_uuid=True), nullable=False, unique=True)
     request_hash = Column(CHAR(64), nullable=False)
-    transaction_type = Column(String(20), nullable=False)
+    transaction_type_id = Column(
+        BigInteger,
+        ForeignKey(TransactionType.id, ondelete="RESTRICT"),
+        nullable=False,
+    )
     created_at = Column(DateTime(timezone=True), nullable=False)
+
+    transaction_type_ref = relationship(
+        "TransactionType",
+        foreign_keys=[transaction_type_id],
+        lazy="selectin",
+    )
 
     entries = relationship(
         "TransactionEntry",
@@ -23,3 +34,8 @@ class FinancialTransaction(Base):
 
     DEPOSIT = "DEPOSIT"
     TRANSFER = "TRANSFER"
+
+    @property
+    def transaction_type(self) -> str:
+        """Representação textual externa do tipo de operação (DEPOSIT/TRANSFER)."""
+        return self.transaction_type_ref.enumerator

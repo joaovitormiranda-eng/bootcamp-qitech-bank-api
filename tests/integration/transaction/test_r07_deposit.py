@@ -63,9 +63,15 @@ def test_deposit_returns_created_transaction(
         transactions = connection.execute(
             text(
                 """
-                SELECT id, transaction_key, request_control_key, request_hash,
-                       transaction_type, created_at
+                SELECT financial_transaction.id,
+                       financial_transaction.transaction_key,
+                       financial_transaction.request_control_key,
+                       financial_transaction.request_hash,
+                       transaction_type.enumerator AS transaction_type,
+                       financial_transaction.created_at
                 FROM financial_transaction
+                JOIN transaction_type
+                  ON transaction_type.id = financial_transaction.transaction_type_id
                 WHERE request_control_key = :request_control_key
                 """
             ),
@@ -85,11 +91,16 @@ def test_deposit_returns_created_transaction(
         entries = connection.execute(
             text(
                 """
-                SELECT entry.transaction_id, entry.direction, entry.entry_type,
+                SELECT entry.transaction_id,
+                       transaction_direction.enumerator AS direction,
+                       entry_type.enumerator AS entry_type,
                        entry.amount_cents, entry.balance_after_cents,
                        entry.created_at, account.account_key
                 FROM transaction_entry AS entry
                 JOIN account ON account.id = entry.account_id
+                JOIN transaction_direction
+                  ON transaction_direction.id = entry.direction_id
+                JOIN entry_type ON entry_type.id = entry.entry_type_id
                 WHERE entry.transaction_id = :transaction_id
                 ORDER BY entry.id
                 """

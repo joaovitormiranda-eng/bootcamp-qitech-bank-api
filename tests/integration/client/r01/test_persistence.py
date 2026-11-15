@@ -47,10 +47,12 @@ def _post_client(payload: dict[str, str]) -> BaseConnectorResponse:
 def _client_by_key(connection: Connection, client_key: str):
     return connection.execute(
         text("""
-            SELECT c.id, c.client_key::text AS client_key, c.client_type,
+            SELECT c.id, c.client_key::text AS client_key,
+                   client_type.enumerator AS client_type,
                    c.email, c.timezone, s.enumerator AS status
             FROM client AS c
             JOIN client_status AS s ON s.id = c.status_id
+            JOIN client_type ON client_type.id = c.client_type_id
             WHERE c.client_key = CAST(:client_key AS uuid)
         """),
         {"client_key": client_key},
@@ -61,9 +63,10 @@ def _assert_initial_event(connection: Connection, client_id: int) -> None:
     events = connection.execute(
         text("""
             SELECT e.from_status_id, s.enumerator AS to_status,
-                   e.actor_type, e.reason
+                   actor_type.enumerator AS actor_type, e.reason
             FROM client_status_event AS e
             JOIN client_status AS s ON s.id = e.to_status_id
+            JOIN actor_type ON actor_type.id = e.actor_type_id
             WHERE e.client_id = :client_id
         """),
         {"client_id": client_id},

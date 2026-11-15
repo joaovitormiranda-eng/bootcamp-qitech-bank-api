@@ -38,7 +38,8 @@ def _snapshot(engine: Engine, client_key: str) -> dict:
             text(
                 """
                 SELECT client.id AS client_id, client.client_key::text AS client_key,
-                       client.client_type, client.email, client.timezone,
+                       client_type.enumerator AS client_type,
+                       client.email, client.timezone,
                        client.created_at, client.updated_at,
                        status.enumerator AS client_status,
                        (SELECT COUNT(*) FROM client_status_event
@@ -66,6 +67,7 @@ def _snapshot(engine: Engine, client_key: str) -> dict:
                         WHERE account.client_id = client.id) AS account_updated_at
                 FROM client
                 JOIN client_status AS status ON status.id = client.status_id
+                JOIN client_type ON client_type.id = client.client_type_id
                 WHERE client.client_key = CAST(:client_key AS uuid)
                 """
             ),
@@ -82,11 +84,13 @@ def _events(engine: Engine, client_key: str) -> list[dict]:
                 """
                 SELECT source.enumerator AS from_status,
                        destination.enumerator AS to_status,
-                       event.actor_type, event.reason, event.created_at
+                       actor_type.enumerator AS actor_type,
+                       event.reason, event.created_at
                 FROM client_status_event AS event
                 JOIN client ON client.id = event.client_id
                 LEFT JOIN client_status AS source ON source.id = event.from_status_id
                 JOIN client_status AS destination ON destination.id = event.to_status_id
+                JOIN actor_type ON actor_type.id = event.actor_type_id
                 WHERE client.client_key = CAST(:client_key AS uuid)
                 ORDER BY event.id
                 """

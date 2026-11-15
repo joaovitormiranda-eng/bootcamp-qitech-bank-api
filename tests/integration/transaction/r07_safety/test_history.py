@@ -32,11 +32,16 @@ def test_sequential_deposits_record_each_historical_balance(
             text(
                 """
                 SELECT transaction.request_control_key,
-                       entry.direction, entry.entry_type,
+                       transaction_direction.enumerator AS direction,
+                       entry_type.enumerator AS entry_type,
                        entry.amount_cents, entry.balance_after_cents
                 FROM transaction_entry AS entry
                 JOIN financial_transaction AS transaction
                   ON transaction.id = entry.transaction_id
+                JOIN transaction_direction
+                  ON transaction_direction.id = entry.direction_id
+                JOIN entry_type
+                  ON entry_type.id = entry.entry_type_id
                 WHERE transaction.request_control_key IN (
                     :first_key,
                     :second_key

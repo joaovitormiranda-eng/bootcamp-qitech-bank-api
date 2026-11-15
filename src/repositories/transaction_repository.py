@@ -1,15 +1,45 @@
 from datetime import datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.orm import joinedload, selectinload
 
 from database import Context
-from models import FinancialTransaction, TransactionEntry
+from models import (
+    EntryType,
+    FinancialTransaction,
+    TransactionDirection,
+    TransactionEntry,
+    TransactionType,
+)
 
 
 class TransactionRepository:
     def __init__(self, context: Context) -> None:
         self.session = context.db_session
+
+    def _transaction_type_id(self, enumerator: str) -> int:
+        """Resolve o texto do tipo de operação para o id da lookup."""
+        return (
+            self.session.query(TransactionType.id)
+            .filter(TransactionType.enumerator == enumerator)
+            .scalar()
+        )
+
+    def _direction_id(self, enumerator: str) -> int:
+        """Resolve o texto da direção para o id da lookup."""
+        return (
+            self.session.query(TransactionDirection.id)
+            .filter(TransactionDirection.enumerator == enumerator)
+            .scalar()
+        )
+
+    def _entry_type_id(self, enumerator: str) -> int:
+        """Resolve o texto da natureza do lançamento para o id da lookup."""
+        return (
+            self.session.query(EntryType.id)
+            .filter(EntryType.enumerator == enumerator)
+            .scalar()
+        )
 
     def create_transaction(
         self,
@@ -23,7 +53,7 @@ class TransactionRepository:
             transaction_key=transaction_key,
             request_control_key=request_control_key,
             request_hash=request_hash,
-            transaction_type=transaction_type,
+            transaction_type_id=self._transaction_type_id(transaction_type),
             created_at=created_at,
         )
         self.session.add(transaction)
@@ -41,10 +71,11 @@ class TransactionRepository:
         created_at: datetime,
     ) -> TransactionEntry:
         entry = TransactionEntry(
+            entry_key=uuid4(),
             transaction_id=transaction_id,
             account_id=account_id,
-            direction=direction,
-            entry_type=entry_type,
+            direction_id=self._direction_id(direction),
+            entry_type_id=self._entry_type_id(entry_type),
             amount_cents=amount_cents,
             balance_after_cents=balance_after_cents,
             created_at=created_at,

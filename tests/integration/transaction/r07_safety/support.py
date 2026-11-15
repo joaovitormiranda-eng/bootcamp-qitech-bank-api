@@ -33,7 +33,9 @@ def _reject_transaction_entry(
             f"""
             CREATE FUNCTION {function_name}() RETURNS trigger AS $$
             BEGIN
-                IF NEW.entry_type = '{entry_type}' AND EXISTS (
+                IF NEW.entry_type_id = (
+                        SELECT id FROM entry_type WHERE enumerator = '{entry_type}'
+                   ) AND EXISTS (
                     SELECT 1
                     FROM financial_transaction
                     WHERE id = NEW.transaction_id
