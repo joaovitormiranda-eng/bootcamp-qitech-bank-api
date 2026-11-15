@@ -4,7 +4,9 @@
 
 O projeto implementa o ciclo bancário básico de uma plataforma parceira: cadastro de pessoas físicas (PF) e jurídicas (PJ), análise cadastral, abertura e gerenciamento de contas, depósitos, transferências e consulta de extrato. A solução prioriza **consistência financeira, integridade dos estados, idempotência, concorrência e rastreabilidade**, com desenvolvimento orientado a testes (**TDD — RED → GREEN → REFACTOR**).
 
-> **Entrega (12/10/2026):** as **10 rotas (R01–R10)** estão integradas à `main`. A evidência reprodutível e autoritativa da suíte completa é o pipeline de **Integração Contínua** (`.github/workflows/ci.yml`), que executou e passou verde no GitHub Actions: run [`43474403332`](https://github.com/joaovitormiranda-eng/bootcamp-qitech-bank-api/actions/runs/43474403332), com **442 testes aprovados em 18,44 s**. Historicamente, a equipe já havia reportado uma execução local com 442 testes aprovados em 64,58 s; a evidência reprodutível atual, porém, é o run de CI acima. O resultado verde deve ser lido na aba **Actions** do repositório. Veja a seção [CI / Integração contínua](#ci--integração-contínua).
+> **Entrega (12/10/2026) e evolução P1/P2.** As **10 rotas (R01–R10)** estão integradas à `main`. A evidência reprodutível e autoritativa da suíte completa é o pipeline de **Integração Contínua** (`.github/workflows/ci.yml`). Após as rodadas **P1** (reprodutibilidade, contratos, isolamento de testes, fronteiras de camada e normalização do schema) e **P2** (segurança de dependências, hardening da API e do CI, DevSecOps e cobertura de erros), o último run verde é [`43735514804`](https://github.com/joaovitormiranda-eng/bootcamp-qitech-bank-api/actions/runs/43735514804), com os jobs `test`, `migration` e `security` em `success` e **554 testes aprovados** (`554 passed`). O resultado verde deve ser lido na aba **Actions** do repositório — a fonte autoritativa. Veja [CI / Integração contínua](#ci--integração-contínua) e o [histórico de auditorias](docs/AUDITORIAS.md).
+>
+> *Nota histórica:* a entrega inicial reportava **442 testes** (run `43474403332`); o número cresceu para 554 com os testes adicionados em P1/P2. Referências a "442" preservadas em documentos de auditoria descrevem a baseline daquele momento, não o estado atual.
 
 ## Quick start
 
@@ -45,6 +47,11 @@ O Compose cria automaticamente o schema de um volume novo a partir de `database/
 | [Modelo de Dados — ERD](docs/ERD.md) | Entidades, relacionamentos, integridade referencial e decisões de persistência |
 | [Contratos da API — ROTAS](docs/ROTAS.md) | Headers, parâmetros, payloads, respostas, códigos HTTP e regras por endpoint |
 | [Fluxos de Negócio — FLUXOS](docs/FLUXOS.md) | Diagramas Mermaid de sucesso, falha, transações, concorrência e idempotência |
+| [Arquitetura em camadas — ARQUITETURA](docs/ARQUITETURA.md) | Camadas (resources, middlewares, controllers, services, repositories, connectors, banco), diagramas de componentes e de sequência |
+| [Segurança e modelo de confiança — SEGURANCA](docs/SEGURANCA.md) | `INTERNAL-TOKEN`, single-tenant, comparação em tempo constante, riscos residuais aceitos do MVP |
+| [CI e DevSecOps — CI-DEVSECOPS](docs/CI-DEVSECOPS.md) | Jobs `test`, `migration` e `security`; Bandit e pip-audit bloqueantes; clusters PostgreSQL isolados |
+| [Migrações de schema — MIGRACOES](docs/MIGRACOES.md) | Schema populado, idempotência da migração e rollback com preservação de dados |
+| [Histórico de auditorias — AUDITORIAS](docs/AUDITORIAS.md) | Rodadas P1/P2, decisões, matriz de rastreabilidade documentação↔código e riscos residuais |
 
 **Modelo interativo:** [visualizar o ERD no dbdiagram.io](https://dbdiagram.io/d/ERD-bootcamp-QItech-6abc58be5869425612d24fa6). O esquema físico versionado encontra-se em [`database/database.sql`](database/database.sql).
 
@@ -95,25 +102,30 @@ O produto atende **uma plataforma parceira por implantação**, no Brasil e em *
 Requisição HTTP
       |
       v
-FastAPI / middlewares
+middlewares  (request_context -> request_logger -> internal_token -> session_manager)
       |
       v
 resources + validação JSON Schema
       |
       v
-controllers (regras de negócio e transações)
+controllers (regras de negócio e fronteira transacional / COMMIT único)
       |
       v
-repositories + models (PostgreSQL)
+services (puro: tarifa HALF_UP, hash SHA-256 da intenção)
       |
       v
-DTOs / projeções de resposta, quando aplicáveis
+repositories + models (PostgreSQL, SQLAlchemy)   connectors (HTTP externo: Analysis Provider)
+      |
+      v
+DTOs / projeções de resposta
       |
       v
 Resposta HTTP
 ```
 
-O banco possui **10 tabelas**, agrupadas em cadastro, contas e movimentações financeiras. Os históricos de mudança de estado são persistidos separadamente dos estados atuais, enquanto `financial_transaction` e `transaction_entry` registram as operações e seus efeitos. Consulte o [ERD](docs/ERD.md) para cardinalidades e restrições.
+O detalhamento de cada camada, com diagramas de componentes e de sequência, está em [docs/ARQUITETURA.md](docs/ARQUITETURA.md).
+
+O banco possui **15 tabelas**: **8 de domínio** (cadastro, contas e movimentações financeiras) e **7 de lookup** (`client_status`, `account_status`, `client_type`, `transaction_type`, `transaction_direction`, `entry_type`, `actor_type`). As tabelas de lookup foram introduzidas na rodada **P1-D** (COD-06) para substituir enumerações `VARCHAR + CHECK IN (...)` por integridade referencial via `FOREIGN KEY`; a representação textual externa continua sendo o `enumerator`, resolvido pela camada ORM. Os históricos de mudança de estado são persistidos separadamente dos estados atuais, enquanto `financial_transaction` e `transaction_entry` registram as operações e seus efeitos (este último com `entry_key UUID` público, também de P1-D/COD-05). Consulte o [ERD](docs/ERD.md) para o modelo completo, cardinalidades e restrições.
 
 ## Executar localmente com Docker
 
@@ -162,13 +174,15 @@ As portas locais de referência são **3000** (API), **5432** (PostgreSQL princi
 
 ## CI / Integração contínua
 
-[![CI - full test suite](https://github.com/joaovitormiranda-eng/bootcamp-qitech-bank-api/actions/workflows/ci.yml/badge.svg?branch=fix/p0-test-suite-reproducibility)](https://github.com/joaovitormiranda-eng/bootcamp-qitech-bank-api/actions/workflows/ci.yml)
+[![CI - full test suite](https://github.com/joaovitormiranda-eng/bootcamp-qitech-bank-api/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/joaovitormiranda-eng/bootcamp-qitech-bank-api/actions/workflows/ci.yml)
 
 O workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) é a forma
-**sancionada e reprodutível** de executar a suíte completa (442 testes: unitários,
-integração HTTP e esquema). A cada `push` e `pull_request` ele provisiona, em um
-runner `ubuntu-latest`, toda a infraestrutura que os testes exigem e executa
-`pytest` como único portão de aprovação do job:
+**sancionada e reprodutível** de executar a suíte completa (atualmente **554
+testes**: unitários, integração HTTP e esquema). A cada `push` e `pull_request`
+ele provisiona, em runners `ubuntu-latest`, toda a infraestrutura que os testes
+exigem e executa **três jobs** — `test`, `migration` e `security` — detalhados em
+[docs/CI-DEVSECOPS.md](docs/CI-DEVSECOPS.md). O job `test` executa `pytest` como
+único portão de aprovação, sobre:
 
 - **PostgreSQL** (`postgres:16`) em **dois clusters fisicamente separados**:
   `bootcamp` (API) em `127.0.0.1:5432` e `bootcamp_test` (esquema/testes) em
@@ -182,15 +196,27 @@ runner `ubuntu-latest`, toda a infraestrutura que os testes exigem e executa
 - **API viva** via `uvicorn app:app` em `127.0.0.1:3001`, aguardada até
   `/health_check` responder **204** antes de rodar a suíte.
 
+Além de `test`, o workflow executa:
+
+- **`migration`** — valida a migração de schema **populado** (P1-D) em um cluster
+  PostgreSQL efêmero dedicado: aplica `database/migrations/0001_*.sql` sobre um
+  schema legado com dados, confere contagens/saldos antes/depois, idempotência e
+  rollback com preservação de dados. Ver [docs/MIGRACOES.md](docs/MIGRACOES.md).
+- **`security`** (DevSecOps, P2) — roda **Bandit** (SAST, bloqueante em 0 achados)
+  e **pip-audit** (auditoria de dependências, **bloqueante** sobre
+  `requirements.txt` e `requirements-dev.txt`). Ver
+  [docs/CI-DEVSECOPS.md](docs/CI-DEVSECOPS.md).
+
 **A evidência verde autoritativa é a execução do workflow na aba Actions do
-repositório**, não uma garantia independente de ambiente. O CI foi executado e
-passou: run [`43474403332`](https://github.com/joaovitormiranda-eng/bootcamp-qitech-bank-api/actions/runs/43474403332),
-com **`442 passed in 18.44s`** (442 coletados, 442 aprovados, 0 falhas, 0 erros,
-0 ignorados). Nenhum resultado verde foi fabricado neste README: o número de
-testes aprovados e o tempo são os lidos no log do GitHub Actions, e a aba
+repositório**, não uma garantia independente de ambiente. O último run verde da
+`main` é [`43735514804`](https://github.com/joaovitormiranda-eng/bootcamp-qitech-bank-api/actions/runs/43735514804),
+com `test`, `migration` e `security` em `success` e **`554 passed`** no job
+`test`. Nenhum resultado verde foi fabricado neste README: o número de testes
+aprovados é o lido no log do GitHub Actions, e a aba
 [**Actions**](https://github.com/joaovitormiranda-eng/bootcamp-qitech-bank-api/actions/workflows/ci.yml)
 permanece a fonte autoritativa. O artefato `pytest-results` publicado pelo job
-contém o relatório JUnit (`pytest-results.xml`) e o `api.log`.
+`test` contém o relatório JUnit (`pytest-results.xml`) e o `api.log`
+(retenção de 7 dias).
 
 Localmente, a suíte completa continua dependendo de **Docker**, conforme descrito
 na seção abaixo. Sem Docker (ou sem PostgreSQL + MockServer + API disponíveis no
@@ -260,15 +286,16 @@ Elas precisam apontar para os serviços que você subiu. O workflow
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) é a referência exata desse
 mapeamento, pois executa o mesmo `pytest` contra uma stack totalmente provisionada.
 
-**Resultado dos testes:** a evidência de reprodução do P0 vem da execução do
-workflow de CI: run [`43474403332`](https://github.com/joaovitormiranda-eng/bootcamp-qitech-bank-api/actions/runs/43474403332)
-concluiu com **`442 passed in 18.44s`**. Historicamente, a equipe reportou uma
-execução local de `442 passed in 64.58s` (12/10/2026); ambos registram execuções
-específicas, **não** uma garantia independente de ambiente. O banco da API roda
-em `127.0.0.1:5432` (`bootcamp`) e o banco descartável de testes em
-`127.0.0.1:5433` (`bootcamp_test`), em clusters separados. Leia o número de
-testes aprovados e o tempo na aba **Actions** do repositório, a fonte
-autoritativa.
+**Resultado dos testes:** a evidência reprodutível e autoritativa é o workflow de
+CI. O último run verde da `main` é
+[`43735514804`](https://github.com/joaovitormiranda-eng/bootcamp-qitech-bank-api/actions/runs/43735514804),
+com **`554 passed`** no job `test` e `migration`/`security` também em `success`.
+Nos runs do job `test`, o banco da API roda em `127.0.0.1:5432` (`bootcamp`) e o
+banco descartável de testes em `127.0.0.1:5433` (`bootcamp_test`), em clusters
+PostgreSQL **fisicamente separados** — exigência das fixtures que comparam o
+`system_identifier` por cluster. Leia o número de testes aprovados e o tempo na
+aba **Actions** do repositório, a fonte autoritativa. (Referência histórica: a
+baseline inicial do P0 era `442 passed`, run `43474403332`.)
 
 **Isolamento e segurança do reset destrutivo:** o reset de esquema em
 `tests/utils/db_utils.py` executa **`DROP SCHEMA public CASCADE`** e recria o
@@ -290,20 +317,40 @@ docker compose -f compose.test.yml stop db_test
 bootcamp-qitech-bank-api/
 ├── .github/
 │   └── workflows/
-│       └── ci.yml             # Pipeline de CI: stack completa + suíte pytest
+│       └── ci.yml             # Pipeline de CI: jobs test, migration e security
 ├── src/                       # API, regras de negócio e persistência
+│   ├── app.py                 # Composition root (middlewares, rotas, handlers)
+│   ├── constants.py           # Config por ambiente; BYPASS_ENDPOINTS; timeouts
+│   ├── database.py            # Engine/sessão SQLAlchemy; lock/statement_timeout
+│   ├── middlewares/           # request_context, request_logger, internal_token, session_manager
+│   ├── resources/             # Camada HTTP (um resource por domínio) + health_check
+│   ├── controllers/           # Regras de negócio e fronteira transacional
+│   ├── services/              # Puro: transfer_fee (HALF_UP), transaction_hash (SHA-256)
+│   ├── repositories/          # Acesso a dados (SQLAlchemy)
+│   ├── connectors/            # HTTP externo: rest_connector, client_analysis_connector
+│   ├── models/                # ORM (domínio + lookups)
+│   ├── dtos/                  # Projeções de resposta
+│   ├── errors/                # QIException, catálogo de erros e handlers
+│   ├── schemas/               # JSON Schema de validação de entrada
+│   └── utils/                 # logger (allowlist), request_context, database_errors
 ├── database/
-│   └── database.sql           # Esquema PostgreSQL
+│   ├── database.sql           # Esquema PostgreSQL alvo (15 tabelas, pós-P1-D)
+│   └── migrations/            # Migração versionada 0001 + ROLLBACK + README
 ├── tests/                     # Testes unitários, HTTP, integração e banco
 ├── docs/
-│   ├── RFC.md                 # RFC no formato original Markdown
-│   ├── RFC.pdf                # RFC para submissão
-│   ├── ERD.md                 # Modelo de dados e decisões de persistência
-│   ├── ROTAS.md               # Contratos HTTP
-│   └── FLUXOS.md              # Fluxos Mermaid e cenários de falha
-├── docker-compose.yml         # Ambiente principal
+│   ├── RFC.md / RFC.pdf       # RFC v2.1 (histórica)
+│   ├── ERD.md                 # Modelo de dados (15 tabelas) e decisões
+│   ├── ROTAS.md               # Contratos HTTP R01–R10
+│   ├── FLUXOS.md              # Fluxos Mermaid e cenários de falha
+│   ├── ARQUITETURA.md         # Camadas, componentes e sequências
+│   ├── SEGURANCA.md           # Modelo de confiança e riscos residuais
+│   ├── CI-DEVSECOPS.md        # Jobs de CI e verificações de segurança
+│   ├── MIGRACOES.md           # Migração, idempotência e rollback
+│   ├── AUDITORIAS.md          # Histórico P1/P2 e rastreabilidade
+│   └── P1*/P2A*               # Relatórios de auditoria por fase (históricos)
+├── docker-compose.yml         # Ambiente principal (API + Postgres + MockServer)
 ├── compose.test.yml           # Banco isolado para testes de esquema
-├── requirements-dev.txt
+├── requirements.txt / requirements-dev.txt
 └── README.md
 ```
 

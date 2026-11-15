@@ -4,9 +4,11 @@
 
 **Autores:** João Vitor Miranda Sousa · Mohamad Ahmad Barakat
 
-**Versão:** 2.0 · 12/10/2026
+**Versão:** 2.1 · revisão P2-Final (contratos inalterados; referências atualizadas) · base 12/10/2026
 
-**Documentos relacionados:** [RFC](RFC.md) · [Modelo de dados (ERD)](ERD.md) · [Fluxos de negócio](FLUXOS.md)
+**Documentos relacionados:** [RFC](RFC.md) · [Modelo de dados (ERD)](ERD.md) · [Fluxos de negócio](FLUXOS.md) · [Arquitetura](ARQUITETURA.md) · [Segurança](SEGURANCA.md)
+
+> Os contratos R01–R10, o catálogo de erros e as regras de idempotência/paginação descritos aqui refletem o código integrado à `main` e foram reconferidos na rodada P2-Final. A autenticação `INTERNAL-TOKEN` usa comparação em **tempo constante** (`hmac.compare_digest`); detalhes em [SEGURANCA.md](SEGURANCA.md).
 
 ## 1. Visão geral
 
