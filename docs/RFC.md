@@ -6,6 +6,17 @@
 | **Data** | 12/10/2026 |
 | **Versão** | 2.1 |
 
+> **Nota editorial.** Este documento é a **RFC v2.1 original (12/10/2026)**,
+> mantida sem reescrita, assim como [RFC.pdf](RFC.pdf). Os dois diagramas de
+> banco abaixo retratam o schema daquela data (enumerações como colunas
+> `VARCHAR`, `transaction_entry` sem `entry_key`). O schema atual normaliza as
+> enumerações em tabelas de lookup referenciadas por `FOREIGN KEY` e adiciona
+> `transaction_entry.entry_key`, totalizando **15 tabelas**: consulte
+> [ERD.md](ERD.md) e [`database/database.sql`](../database/database.sql), e
+> [MIGRACOES.md](MIGRACOES.md) para a evolução de bancos existentes. Os
+> requisitos, os contratos R01–R10, as regras financeiras e as invariantes desta
+> RFC continuam válidos; mudou apenas a representação física das enumerações.
+
 ## Contextualização
 
 ### Entendendo o problema

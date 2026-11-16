@@ -4,9 +4,11 @@
 
 **Autores:** João Vitor Miranda Sousa · Mohamad Ahmad Barakat
 
-**Versão:** 2.0 · 12/10/2026
+**Versão:** 2.1 · contratos conferidos com o código atual · versão original de 12/10/2026
 
-**Documentos relacionados:** [RFC](RFC.md) · [Modelo de dados (ERD)](ERD.md) · [Fluxos de negócio](FLUXOS.md)
+**Documentos relacionados:** [RFC](RFC.md) · [Modelo de dados (ERD)](ERD.md) · [Fluxos de negócio](FLUXOS.md) · [Arquitetura](ARQUITETURA.md) · [Segurança](SEGURANCA.md)
+
+> Os contratos R01–R10, o catálogo de erros e as regras de idempotência e paginação descritos aqui correspondem às rotas registradas em `src/app.py`. A validação do `INTERNAL-TOKEN` usa comparação em tempo constante; detalhes em [SEGURANCA.md](SEGURANCA.md).
 
 ## 1. Visão geral
 
@@ -448,6 +450,13 @@ Cada depósito produz um item `CREDIT / PRINCIPAL`. Uma transferência pode prod
 
 A rota não consulta banco, não aciona conectores e não acessa recursos de domínio. Se a aplicação já estiver respondendo HTTP, a indisponibilidade posterior do PostgreSQL não deve, por si só, transformar esse endpoint em verificação de banco. Repetições são idempotentes e não geram escrita.
 
+### Rotas auxiliares (fora de R01–R10)
+
+| Método | Caminho | Autenticação | Comportamento |
+|---|---|---|---|
+| `GET` | `/` | Pública | `200` com `{"service": "<SERVICE_NAME>"}`; não expõe PID nem outros dados de runtime |
+| `GET` | `/docs`, `/redoc`, `/openapi.json` | `INTERNAL-TOKEN` | Registradas somente quando `APP_ENV` é exatamente `local` ou `test`; caso contrário não são registradas (com token válido, respondem `404 QIT000404`) |
+
 ## 4. Regras de estado e consistência
 
 ### 4.1 Cliente
@@ -486,6 +495,9 @@ R06:          ACTIVE | INACTIVE → CLOSED (saldo zero)
 |---|---:|---|
 | `QIT000001` | `400` | Erro de formato, parâmetro ou validação estrutural |
 | `QIT000002` | `403` | `INTERNAL-TOKEN` ausente/inválido |
+| `QIT000010` | `400` | Parâmetro de path/query inválido (ex.: `client_key` malformado na R03) |
+| `QIT000404` | `404` | Caminho inexistente |
+| `QIT000405` | `405` | Método não permitido no caminho |
 | `QIT000500` | `500` | Falha interna inesperada |
 | `CLI0001` | `404` | Cliente não encontrado |
 | `CLI0002` | `409` | Estado ou transição do cliente incompatível |

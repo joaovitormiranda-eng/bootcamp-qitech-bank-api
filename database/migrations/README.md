@@ -1,13 +1,14 @@
-# Migrações de banco — P1-D
+# Migrações de banco
 
 Este diretório contém migrações **SQL versionadas** aplicadas sobre um banco
-PostgreSQL **já populado**. O bootstrap de um banco vazio continua sendo
-`database/database.sql` (schema alvo, já no estado pós-P1-D); as migrações aqui
-existem para evoluir instalações que ainda estão no schema antigo **sem perder
-dados**.
+PostgreSQL **já populado**. Um banco vazio é criado diretamente por
+`database/database.sql`, que já está no schema atual; as migrações existem para
+evoluir instalações criadas com um schema anterior **sem perder dados**.
 
 > Não há Alembic no projeto (o schema é instalado por `database.sql` no
 > `docker-entrypoint-initdb.d`). Estas migrações são scripts `psql` idempotentes.
+> O guia completo, com comandos para Docker Compose, validação e recuperação,
+> está em [`docs/MIGRACOES.md`](../../docs/MIGRACOES.md).
 
 ## Convenção
 
@@ -17,29 +18,34 @@ dados**.
   (`ROLLBACK` total em qualquer erro).
 - Idempotente: reexecutar não duplica objetos nem dados de lookup.
 
-## 0001 — COD-05/COD-06 (lookup tables + entry_key)
+## 0001 — lookups de enumeração e `entry_key`
 
 `0001_cod05_cod06_lookup_and_entry_key.sql`
 
-- **COD-06:** cria as lookups `client_type`, `transaction_type`,
-  `transaction_direction`, `entry_type`, `actor_type`; faz backfill das colunas
-  textuais para FKs `*_id`; remove os `CHECK IN (...)` e as colunas textuais.
-- **COD-05:** adiciona `transaction_entry.entry_key UUID NOT NULL UNIQUE`, com
-  backfill determinístico por linha (`gen_random_uuid()`), preservando a chave
-  interna `id` (PK) e todas as FKs/ordenação.
+- Cria as lookups `client_type`, `transaction_type`, `transaction_direction`,
+  `entry_type` e `actor_type`; preenche as novas FKs `*_id` a partir das colunas
+  textuais; remove os `CHECK IN (...)` e as colunas textuais.
+- Adiciona `transaction_entry.entry_key UUID NOT NULL UNIQUE`, preenchendo cada
+  linha com `gen_random_uuid()` (valores **aleatórios**). O preenchimento só
+  atinge linhas com `entry_key IS NULL`, então reexecuções preservam as chaves
+  já atribuídas. A chave interna `id` (PK), as FKs e a ordenação não mudam.
+
+`psql` e `pg_dump` não aceitam o formato `postgresql+psycopg2://` do
+`DATABASE_URL` usado pela aplicação. Nos exemplos abaixo, `$PG_URL` é uma URL
+`postgresql://usuario:senha@host:porta/banco`.
 
 ### Pré-condições (obrigatórias em ambiente não-efêmero)
 
 1. **Backup:** `pg_dump` completo ANTES de aplicar.
    ```sh
-   pg_dump "$DATABASE_URL" -Fc -f pre_0001.dump
+   pg_dump "$PG_URL" -Fc -f pre_0001.dump
    ```
 2. Janela de manutenção (a migração faz `ALTER TABLE`/`DROP COLUMN`).
 
 ### Aplicar
 
 ```sh
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+psql "$PG_URL" -v ON_ERROR_STOP=1 \
   -f database/migrations/0001_cod05_cod06_lookup_and_entry_key.sql
 ```
 
@@ -57,14 +63,16 @@ identidade, valores monetários, hashes e relacionamentos antes/depois.
 
 - **Preferencial:** restaurar do backup.
   ```sh
-  pg_restore --clean --if-exists -d "$DATABASE_URL" pre_0001.dump
+  pg_restore --clean --if-exists -d "$PG_URL" pre_0001.dump
   ```
 - **Estrutural (quando o restore não for viável):**
   ```sh
-  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/migrations/0001_ROLLBACK.sql
+  psql "$PG_URL" -v ON_ERROR_STOP=1 -f database/migrations/0001_ROLLBACK.sql
   ```
-  Lossless para dados de negócio (o `enumerator` é o mesmo texto). O `entry_key`
-  é descartado no rollback por não ser referenciado por nenhuma FK.
+  Preserva os dados de negócio (o texto das enumerações é reconstruído a partir
+  do `enumerator`). O `entry_key` é descartado no rollback por não ser
+  referenciado por nenhuma FK. Após o rollback, o banco volta ao schema anterior
+  e não é compatível com a versão atual da API.
 
 ### Segurança
 

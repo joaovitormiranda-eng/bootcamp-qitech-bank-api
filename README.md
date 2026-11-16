@@ -1,16 +1,52 @@
 # BaaS Simplificado
 
+[![CI - full test suite](https://github.com/mohamad347/bootcamp-qitech-bank-api/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mohamad347/bootcamp-qitech-bank-api/actions/workflows/ci.yml)
+
 **API REST de Banking as a Service (BaaS)** desenvolvida para o **Bootcamp QI Tech 2026** por **João Vitor Miranda Sousa** e **Mohamad Ahmad Barakat**.
 
-O projeto implementa o ciclo bancário básico de uma plataforma parceira: cadastro de pessoas físicas (PF) e jurídicas (PJ), análise cadastral, abertura e gerenciamento de contas, depósitos, transferências e consulta de extrato. A solução prioriza **consistência financeira, integridade dos estados, idempotência, concorrência e rastreabilidade**, com desenvolvimento orientado a testes (**TDD — RED → GREEN → REFACTOR**).
+O projeto implementa o ciclo bancário básico de uma plataforma parceira: cadastro de pessoas físicas (PF) e jurídicas (PJ), análise cadastral, abertura e gerenciamento de contas, depósitos, transferências e consulta de extrato. A solução prioriza **consistência financeira, integridade dos estados, idempotência, concorrência e rastreabilidade**.
 
-> **Entrega — 12/10/2026:** as **10 rotas (R01–R10)** estão integradas à `main`. A última regressão integrada informada pela equipe concluiu com **442 testes aprovados em 64,58 s**. Esses números registram uma execução validada, não uma promessa de resultado em qualquer ambiente.
+> **Projeto acadêmico.** Esta é uma API de referência validada por testes automatizados e CI. Não é um serviço implantado em produção, e este repositório não contém infraestrutura de deploy.
+
+## Sumário
+
+- [Funcionalidades](#funcionalidades)
+- [Tecnologias](#tecnologias)
+- [Quick start](#quick-start)
+- [Configuração](#configuração)
+- [Rotas](#rotas)
+- [Testes](#testes)
+- [Banco de dados e migrações](#banco-de-dados-e-migrações)
+- [Integração contínua](#integração-contínua)
+- [Documentação técnica](#documentação-técnica)
+- [Escopo e limitações](#escopo-e-limitações)
+- [Estrutura do repositório](#estrutura-do-repositório)
+
+## Funcionalidades
+
+- **Clientes PF e PJ** com validação de CPF/CNPJ, idade mínima para PF, e-mail normalizado, cadastro inicial `PENDING` e histórico de transições de estado.
+- **Análise cadastral** por um provedor HTTP externo, simulado com MockServer no ambiente local e de testes.
+- **Uma conta por cliente** durante todo o ciclo de vida, com saldo não negativo e encerramento somente com saldo zero.
+- **Depósitos e transferências** em centavos de BRL, com tarifa de transferência calculada no servidor (PF: 0,50%, mín. R$ 0,50, máx. R$ 10,00; PJ: 1,00%, mín. R$ 1,00, máx. R$ 15,00; arredondamento `HALF_UP`).
+- **Idempotência** obrigatória na R07 pelo header `Idempotency-Key` (UUID) associado ao SHA-256 da intenção: retentativas idênticas não duplicam movimentações e reutilizações conflitantes são rejeitadas.
+- **Concorrência controlada** com locks pessimistas ordenados por `ACCOUNT.id`, revalidação de saldo sob lock e `COMMIT` único por operação.
+- **Extrato paginado** por lançamento (principal e tarifa), com ordenação determinística e filtros de data no timezone do cliente.
+
+## Tecnologias
+
+| Componente | Tecnologia |
+|---|---|
+| API | Python 3.11, FastAPI, uvicorn |
+| Persistência | PostgreSQL 16, SQLAlchemy |
+| Validação de entrada | JSON Schema |
+| Integração de análise | HTTP; MockServer 8.0.0 no ambiente local e de testes |
+| Ambiente | Docker e Docker Compose |
+| Testes | pytest |
+| CI | GitHub Actions (jobs `test`, `migration` e `security`) |
 
 ## Quick start
 
-### Inicialização
-
-Pré-requisito: **somente Docker com Compose**. Para iniciar o projeto desde um clone novo:
+Pré-requisito: **Docker com Compose**.
 
 ```bash
 git clone https://github.com/mohamad347/bootcamp-qitech-bank-api.git
@@ -19,214 +55,174 @@ docker compose up -d --build --wait
 curl -i http://localhost:3000/health_check
 ```
 
-Não é necessário exportar variáveis, instalar PostgreSQL no host, executar SQL
-ou configurar o MockServer. Se o repositório já estiver clonado, basta entrar
-na pasta e executar:
+O `health_check` responde **HTTP 204 No Content**, sem corpo. A API fica em `http://localhost:3000`. Para ver o nome do serviço:
 
 ```bash
-docker compose up -d --build --wait
-curl -i http://localhost:3000/health_check
+curl -s http://localhost:3000/
+# {"service":"bootcamp-api"}
 ```
 
-O health check retorna **HTTP 204**. A API fica disponível em `http://localhost:3000` e o token local de demonstração é `default_token`, enviado no header `INTERNAL-TOKEN`.
+Exemplo de rota protegida, usando o token local de demonstração:
 
-O Compose cria automaticamente o schema de um volume novo a partir de `database/database.sql`, incluindo os índices da R08, e sobe o PostgreSQL e o Analysis Provider necessários.
-
-## Documentação
-
-| Documento | Finalidade |
-|---|---|
-| [RFC — Markdown](docs/RFC.md) | Contexto, solução proposta, decisões arquiteturais, rotas, modelo de dados e principais fluxos |
-| [RFC — PDF](docs/RFC.pdf) | Versão de apresentação da RFC, em A4 |
-| [Modelo de Dados — ERD](docs/ERD.md) | Entidades, relacionamentos, integridade referencial e decisões de persistência |
-| [Contratos da API — ROTAS](docs/ROTAS.md) | Headers, parâmetros, payloads, respostas, códigos HTTP e regras por endpoint |
-| [Fluxos de Negócio — FLUXOS](docs/FLUXOS.md) | Diagramas Mermaid de sucesso, falha, transações, concorrência e idempotência |
-
-**Modelo interativo:** [visualizar o ERD no dbdiagram.io](https://dbdiagram.io/d/ERD-bootcamp-QItech-6abc58be5869425612d24fa6). O esquema físico versionado encontra-se em [`database/database.sql`](database/database.sql).
-
-## Funcionalidades e endpoints
-
-As operações de negócio exigem o header **`INTERNAL-TOKEN`**. A rota de healthcheck é pública.
-
-| ID | Método | Endpoint | Funcionalidade |
-|---|---|---|---|
-| R01 | `POST` | `/client` | Cadastro de cliente PF/PJ |
-| R02 | `GET` | `/client/{client_key}` | Consulta cadastral |
-| R03 | `POST` | `/client/{client_key}/analysis` | Análise cadastral por provedor externo simulado |
-| R04 | `POST` | `/client/{client_key}/account` | Abertura de conta |
-| R05 | `GET` | `/account/{account_key}` | Consulta de conta e saldo |
-| R06 | `PATCH` | `/account/{account_key}` | Alteração do estado da conta |
-| R07 | `POST` | `/account/{account_key}/transaction` | Depósito e transferência com idempotência |
-| R08 | `GET` | `/account/{account_key}/transactions` | Extrato paginado de lançamentos |
-| R09 | `PATCH` | `/client/{client_key}` | Alteração do estado cadastral |
-| R10 | `GET` | `/health_check` | Verificação de vida da API (`204`, sem autenticação) |
-
-Os contratos completos, com exemplos de requisição e resposta, estão em [`docs/ROTAS.md`](docs/ROTAS.md).
-
-### Regras de negócio relevantes
-
-- **Clientes:** perfis `INDIVIDUAL` e `COMPANY`, documentos validados, cadastro inicial `PENDING` e histórico de mudanças de estado.
-- **Contas:** no máximo uma conta por cliente durante todo o ciclo de vida; abertura condicionada ao cliente elegível; saldo não negativo e encerramento somente com saldo zero.
-- **Análise cadastral:** integração HTTP com o provedor simulado no ambiente local; revalidação do estado do cliente após a resposta externa.
-- **Depósitos e transferências:** valores representados em **centavos de BRL**, com atualizações de saldo e lançamentos persistidos atomicamente.
-- **Tarifa de transferência:** calculada no servidor conforme o perfil da conta de origem. Para PF, **0,50%**, mínimo de **R$ 0,50** e máximo de **R$ 10,00**; para PJ, **1,00%**, mínimo de **R$ 1,00** e máximo de **R$ 15,00**, com arredondamento `HALF_UP`.
-- **Idempotência da R07:** header obrigatório `Idempotency-Key` (UUID), associado à intenção da operação. Retentativas idênticas não duplicam movimentações; reutilizações conflitantes são rejeitadas.
-- **Concorrência financeira:** locks pessimistas ordenados, validação de saldo sob lock e `COMMIT` único; falhas antes da confirmação provocam `ROLLBACK`.
-- **Extrato R08:** paginação por **lançamento** (`TRANSACTION_ENTRY`), incluindo principal e tarifa, ordenação determinística e filtros por datas civis interpretadas no timezone do cliente.
-
-O produto atende **uma plataforma parceira por implantação**, no Brasil e em **BRL**. PIX, TED, boletos, saques, KYC comercial real, multi-tenancy e contabilidade completa por partidas dobradas estão fora do escopo deste MVP.
-
-## Tecnologias e arquitetura
-
-| Componente | Tecnologia / responsabilidade |
-|---|---|
-| API | Python, FastAPI |
-| Persistência | PostgreSQL, SQLAlchemy |
-| Validação de entrada | JSON Schema |
-| Integração de análise | HTTP e MockServer no ambiente de desenvolvimento/testes |
-| Ambiente | Docker e Docker Compose |
-| Qualidade | pytest, testes unitários e de integração, TDD |
-
-```text
-Requisição HTTP
-      |
-      v
-FastAPI / middlewares
-      |
-      v
-resources + validação JSON Schema
-      |
-      v
-controllers (regras de negócio e transações)
-      |
-      v
-repositories + models (PostgreSQL)
-      |
-      v
-DTOs / projeções de resposta, quando aplicáveis
-      |
-      v
-Resposta HTTP
+```bash
+curl -i -X POST http://localhost:3000/client \
+  -H "INTERNAL-TOKEN: default_token" \
+  -H "Content-Type: application/json" \
+  -d '{"client_type":"INDIVIDUAL","email":"cliente@example.com","cpf":"52998224725","full_name":"Cliente Exemplo","birth_date":"1995-05-10","timezone":"America/Sao_Paulo"}'
 ```
 
-O banco possui **10 tabelas**, agrupadas em cadastro, contas e movimentações financeiras. Os históricos de mudança de estado são persistidos separadamente dos estados atuais, enquanto `financial_transaction` e `transaction_entry` registram as operações e seus efeitos. Consulte o [ERD](docs/ERD.md) para cardinalidades e restrições.
-
-## Executar localmente com Docker
-
-**Pré-requisitos:** Docker com Compose. Para executar a suíte de testes fora dos containers, também é necessário **Python 3.11 ou superior**.
-
-Clone o repositório e entre na pasta do projeto:
-
-```powershell
-git clone https://github.com/mohamad347/bootcamp-qitech-bank-api.git
-cd bootcamp-qitech-bank-api
-```
-
-Se necessário, crie o arquivo de configuração local a partir do exemplo versionado:
-
-```powershell
-if (-not (Test-Path .env)) { Copy-Item .env.example .env }
-```
-
-Inicie os serviços definidos no Compose principal:
-
-```powershell
-docker compose up -d --build --wait
-docker compose ps
-```
-
-Verifique o funcionamento HTTP:
-
-```powershell
-curl.exe -i http://localhost:3000/health_check
-```
-
-**Resultado esperado:** `HTTP 204 No Content`, sem corpo. Esse endpoint verifica a resposta HTTP do processo, **não** a disponibilidade do PostgreSQL.
+O Compose cria o schema a partir de `database/database.sql` **somente no primeiro provisionamento de um volume vazio**. Para um volume que já existia antes da versão atual do schema, veja [Banco de dados e migrações](#banco-de-dados-e-migrações).
 
 Para consultar logs ou parar os serviços sem remover volumes:
 
-```powershell
+```bash
 docker compose logs -f api
 docker compose stop
 ```
 
-As portas locais de referência são **3000** (API), **5432** (PostgreSQL principal) e **1080** (MockServer, quando habilitado). Os valores de `.env.example` e as credenciais de desenvolvimento são destinados **somente ao ambiente local**. O script [`database/database.sql`](database/database.sql) inicializa o esquema no primeiro provisionamento de um volume PostgreSQL vazio; reconstruir um container não reinicializa automaticamente um volume persistente.
+## Configuração
 
-## Executar os testes
+O quick start não exige arquivo `.env`: o `docker-compose.yml` tem defaults locais. Para sobrescrever valores, copie o exemplo versionado:
 
-A suíte inclui testes de contrato HTTP, regras de domínio, persistência, estados, idempotência, concorrência, rollback, movimentações financeiras e extrato.
-
-### 1. Instalar as dependências de desenvolvimento (PowerShell)
-
-```powershell
-py -3.11 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+```bash
+cp .env.example .env
 ```
 
-No Linux/macOS, substitua a criação do ambiente por `python3.11 -m venv .venv` e utilize `.venv/bin/python` nos comandos seguintes.
+Variáveis principais (lista completa em [`.env.example`](.env.example)):
 
-### 2. Subir o PostgreSQL isolado para testes de esquema
+| Variável | Default local | Uso |
+|---|---|---|
+| `INTERNAL_TOKEN` | `default_token` | Segredo compartilhado exigido no header `INTERNAL-TOKEN` das rotas R01–R09 |
+| `APP_ENV` | `local` (no Compose) | Habilita a documentação OpenAPI apenas quando é `local` ou `test` |
+| `API_PORT` | `3000` | Porta publicada da API principal |
+| `ANALYSIS_PROVIDER_URL` | `http://mockserver:1080` | URL do provedor de análise cadastral |
+| `ANALYSIS_PROVIDER_TIMEOUT` | `5` | Timeout, em segundos, da chamada ao provedor |
+| `DB_LOCK_TIMEOUT_MS` / `DB_STATEMENT_TIMEOUT_MS` | `3000` / `10000` | Timeouts aplicados a cada conexão PostgreSQL |
 
-Os testes de esquema usam uma instância separada: **não aponte `TEST_DATABASE_URL` para o banco principal**.
+> `default_token` e as credenciais `bootcamp:bootcamp` servem **somente para ambiente local**. Nunca coloque credenciais reais em arquivos versionados.
 
-```powershell
-$env:TEST_DB_PORT = "5433"
-docker compose -f compose.test.yml up -d --build --wait
-$env:TEST_DATABASE_URL = "postgresql+psycopg2://bootcamp:bootcamp@127.0.0.1:5433/bootcamp_test"
+Com `APP_ENV=local` ou `APP_ENV=test`, a documentação interativa fica em `/docs`, `/redoc` e `/openapi.json` (atrás do `INTERNAL-TOKEN`). Com `APP_ENV` ausente, vazio, `production` ou qualquer outro valor, essas rotas não são registradas. Detalhes em [SEGURANCA.md](docs/SEGURANCA.md).
+
+## Rotas
+
+R01–R09 exigem o header `INTERNAL-TOKEN`; R10 é pública.
+
+| ID | Método | Endpoint | Função |
+|---|---|---|---|
+| R01 | `POST` | `/client` | Cadastro de cliente PF/PJ |
+| R02 | `GET` | `/client/{client_key}` | Consulta cadastral |
+| R03 | `POST` | `/client/{client_key}/analysis` | Análise cadastral pelo provedor externo |
+| R04 | `POST` | `/client/{client_key}/account` | Abertura da conta |
+| R05 | `GET` | `/account/{account_key}` | Consulta de conta e saldo |
+| R06 | `PATCH` | `/account/{account_key}` | Alteração do estado da conta |
+| R07 | `POST` | `/account/{account_key}/transaction` | Depósito ou transferência idempotente |
+| R08 | `GET` | `/account/{account_key}/transactions` | Extrato paginado |
+| R09 | `PATCH` | `/client/{client_key}` | Alteração do estado do cliente |
+| R10 | `GET` | `/health_check` | Liveness HTTP (`204`) |
+
+Payloads, respostas, códigos de erro e exemplos estão em [docs/ROTAS.md](docs/ROTAS.md).
+
+## Testes
+
+A suíte cobre contratos HTTP, regras de domínio, persistência, estados, idempotência, concorrência, atomicidade, rollback, extrato, schema e migração. Os testes de integração precisam da API, de dois PostgreSQL fisicamente separados e do MockServer ao mesmo tempo.
+
+### Local, com a stack do Compose
+
+`docker compose up -d --build --wait` também sobe uma stack isolada para testes, publicada apenas em `127.0.0.1`:
+
+| Serviço | Porta no host | Uso |
+|---|---|---|
+| `api_test` | `3001` | API com `APP_ENV=test` |
+| `db_api_test` | `55433` | Banco da API de testes |
+| `db_schema_test` | `55432` | Banco descartável `bootcamp_test` para testes de schema |
+| `mockserver_test` | `1081` | MockServer controlado pelos testes |
+
+Esses valores já são os defaults de [`tests/conftest.py`](tests/conftest.py), portanto não é preciso exportar variáveis:
+
+```bash
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pytest -q
 ```
 
-> **Cuidado:** os testes em `tests/integration/database/` podem recriar o schema `public` **do banco de testes**. Nunca utilize dados reais ou a URL do banco principal nessa configuração.
+No Windows (PowerShell), use `py -3.11 -m venv .venv` e `.\.venv\Scripts\python.exe`.
 
-### 3. Executar a regressão
+> **Atenção:** os testes de schema executam `DROP SCHEMA public CASCADE` no banco apontado por `TEST_DATABASE_URL`. `tests/utils/db_utils.py` só permite essa operação em bancos cujo nome termina em `_test`. Nunca aponte as variáveis de teste para um banco com dados reais.
 
-Com os serviços necessários disponíveis:
+Sem a stack, apenas os testes unitários rodam de ponta a ponta:
 
-```powershell
-$env:SERVER_LOCALHOST = "127.0.0.1"
-$env:MOCKSERVER_URL = "http://127.0.0.1:1080"
-$env:TEST_DATABASE_URL = "postgresql+psycopg2://bootcamp:bootcamp@127.0.0.1:5433/bootcamp_test"
-
-.\.venv\Scripts\python.exe -m pytest -q
+```bash
+.venv/bin/python -m pytest tests/unit -q
 ```
 
-Para executar somente os testes físicos do esquema:
+### Contagem de testes
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests/integration/database -q
-```
+- **Entrega de 12/10/2026:** a equipe reportou `442 passed in 64.58s` em execução local.
+- **Estado atual:** o run [`43786395203`](https://github.com/mohamad347/bootcamp-qitech-bank-api/actions/runs/43786395203) da `main` (merge do PR #46) terminou com **`562 passed`** no job `test`, com `migration` e `security` em `success`.
 
-**Última regressão integrada informada pela equipe:** `442 passed in 64.58s` (12/10/2026).
+A aba [Actions](https://github.com/mohamad347/bootcamp-qitech-bank-api/actions/workflows/ci.yml) é a fonte autoritativa para execuções posteriores.
 
-**Isolamento:** o banco `bootcamp_test` destina-se aos testes de esquema, mas certos testes HTTP de integração podem criar **dados exclusivamente de teste** no banco local principal por meio da API. Não execute a suíte apontando a aplicação para um banco de produção ou com dados reais. Para parar somente o banco de testes:
+## Banco de dados e migrações
 
-```powershell
-docker compose -f compose.test.yml stop db_test
-```
+O schema tem **15 tabelas**: 8 de domínio e 7 de lookup (`client_status`, `account_status`, `client_type`, `transaction_type`, `transaction_direction`, `entry_type`, `actor_type`). Enumerações são referenciadas por chave estrangeira, e `transaction_entry` tem a chave pública `entry_key`. O DDL executável é [`database/database.sql`](database/database.sql); o modelo comentado está em [docs/ERD.md](docs/ERD.md).
+
+- **Volume novo:** o Compose aplica `database/database.sql` automaticamente.
+- **Volume existente com o schema anterior:** reiniciar ou reconstruir containers **não** aplica migrações. Faça backup e aplique a migração versionada `0001` conforme [docs/MIGRACOES.md](docs/MIGRACOES.md). Não apague volumes com dados para "atualizar" o schema.
+
+## Integração contínua
+
+O workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) roda em `push` e `pull_request` para `main` e em `workflow_dispatch`, com três jobs independentes:
+
+| Job | O que valida |
+|---|---|
+| `test` | Suíte pytest completa contra dois PostgreSQL 16 separados, MockServer e a API viva |
+| `migration` | Migração `0001` sobre um banco legado populado, idempotência da reexecução e rollback com preservação dos dados de negócio |
+| `security` | Bandit (`bandit -r src -ll`) e pip-audit sobre `requirements.txt` e `requirements-dev.txt`, ambos bloqueantes no job |
+
+Detalhes em [docs/CI-DEVSECOPS.md](docs/CI-DEVSECOPS.md).
+
+## Documentação técnica
+
+| Documento | Conteúdo |
+|---|---|
+| [RFC](docs/RFC.md) · [PDF](docs/RFC.pdf) | RFC v2.1 original: problema, solução, rotas, modelo de dados e fluxos |
+| [ROTAS](docs/ROTAS.md) | Contratos HTTP R01–R10, erros e exemplos |
+| [ERD](docs/ERD.md) | Modelo relacional de 15 tabelas, chaves, índices e decisões |
+| [FLUXOS](docs/FLUXOS.md) | Diagramas dos fluxos cadastrais, financeiros, idempotência e concorrência |
+| [ARQUITETURA](docs/ARQUITETURA.md) | Camadas, middlewares, fronteira transacional e locks |
+| [SEGURANCA](docs/SEGURANCA.md) | Modelo de confiança, controles e riscos residuais |
+| [CI-DEVSECOPS](docs/CI-DEVSECOPS.md) | Jobs de CI, scanners e limites |
+| [MIGRACOES](docs/MIGRACOES.md) | Banco novo × existente, migração 0001, backup e rollback |
+
+## Escopo e limitações
+
+- **Uma plataforma parceira por implantação**, no Brasil e em BRL. Não há autenticação de usuário final, autorização por titular nem multi-tenancy.
+- Fora do escopo: PIX, TED, boletos, saques, estornos, KYC comercial real e contabilidade completa por partidas dobradas.
+- O provedor de análise é simulado com MockServer; não há integração com um fornecedor real.
+- Rate limiting, TLS e usuário de banco com privilégios mínimos dependem da infraestrutura de implantação, que não faz parte deste repositório.
+
+Os riscos residuais estão em [docs/SEGURANCA.md](docs/SEGURANCA.md#riscos-residuais).
 
 ## Estrutura do repositório
 
 ```text
 bootcamp-qitech-bank-api/
-├── src/                       # API, regras de negócio e persistência
+├── .github/workflows/ci.yml   # CI: jobs test, migration e security
+├── src/                       # API (resources, controllers, services, repositories, models...)
 ├── database/
-│   └── database.sql           # Esquema PostgreSQL
-├── tests/                     # Testes unitários, HTTP, integração e banco
-├── docs/
-│   ├── RFC.md                 # RFC no formato original Markdown
-│   ├── RFC.pdf                # RFC para submissão
-│   ├── ERD.md                 # Modelo de dados e decisões de persistência
-│   ├── ROTAS.md               # Contratos HTTP
-│   └── FLUXOS.md              # Fluxos Mermaid e cenários de falha
-├── docker-compose.yml         # Ambiente principal
-├── compose.test.yml           # Banco isolado para testes de esquema
-├── requirements-dev.txt
-└── README.md
+│   ├── database.sql           # Schema PostgreSQL atual (15 tabelas)
+│   └── migrations/            # Migração 0001, rollback e instruções
+├── mockserver/                # Imagem e expectativas do provedor de análise local
+├── tests/                     # Testes unitários, de integração e de banco
+├── docs/                      # RFC, contratos, modelo de dados, fluxos e guias técnicos
+├── docker-compose.yml         # Stack principal e stack isolada de testes
+├── compose.test.yml           # Apenas o banco de testes de schema
+├── requirements.txt           # Dependências da aplicação
+└── requirements-dev.txt       # Dependências de desenvolvimento e testes
 ```
-
-A documentação complementar descreve as decisões e os trade-offs arquiteturais com mais profundidade. **Para conhecer o projeto, comece pela [RFC](docs/RFC.md); para integrar a API, consulte [ROTAS](docs/ROTAS.md); para entender a persistência, veja o [ERD](docs/ERD.md) e os [FLUXOS](docs/FLUXOS.md).**
 
 ---
 
 **Autores:** João Vitor Miranda Sousa · Mohamad Ahmad Barakat
 
-**Projeto acadêmico:** Bootcamp QI Tech 2026 — BaaS Simplificado.
+**Projeto acadêmico:** Bootcamp QI Tech 2026 — BaaS Simplificado. Licença: [MIT](LICENSE).

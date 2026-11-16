@@ -4,9 +4,9 @@
 
 **Autores:** João Vitor Miranda Sousa · Mohamad Ahmad Barakat
 
-**Versão:** Final · 12/10/2026
+**Versão:** 2.1 · fluxos conferidos com o código atual · versão original de 12/10/2026
 
-**Documentos relacionados:** [RFC](RFC.md) · [Modelo de dados (ERD)](ERD.md) · [Contratos das rotas](ROTAS.md)
+**Documentos relacionados:** [RFC](RFC.md) · [Modelo de dados (ERD)](ERD.md) · [Contratos das rotas](ROTAS.md) · [Arquitetura](ARQUITETURA.md) · [Segurança](SEGURANCA.md)
 
 ## 1. Visão geral
 
@@ -244,10 +244,10 @@ flowchart TD
     F --> C{ACCOUNT ACTIVE?}
     C -->|Não| Q["409 ACC0005; ROLLBACK"]
     C -->|Sim| D["Calcular saldo + amount_cents"]
-    D --> E{Valor e saldo válidos?}
-    E -->|Não| Y["422; ROLLBACK"]
-    E -->|Sim| F["Registrar FINANCIAL_TRANSACTION"]
-    F --> G["Inserir CREDIT / PRINCIPAL"]
+    D --> V{Valor e saldo válidos?}
+    V -->|Não| Y["422; ROLLBACK"]
+    V -->|Sim| R["Registrar FINANCIAL_TRANSACTION"]
+    R --> G["Inserir CREDIT / PRINCIPAL"]
     G --> H["Atualizar ACCOUNT.balance_cents"]
     H --> I["COMMIT único; 201 Created"]
 ```
